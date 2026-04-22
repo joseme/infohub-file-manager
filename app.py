@@ -64,7 +64,8 @@ class InfoHubFileManager:
                     if workspace_folder.is_dir():
                         files = list(workspace_folder.iterdir())
                         file_names = [
-                            f.name for f in files
+                            f.name
+                            for f in files
                             if f.is_file()
                             and not f.name.endswith(".image_description")
                             and not f.name.endswith(".image_description.txt")
@@ -207,13 +208,19 @@ class InfoHubFileManager:
                     for workspace_folder in item.iterdir():
                         if workspace_folder.is_dir():
                             for file_path in workspace_folder.iterdir():
-                                if file_path.is_file() and not file_path.name.endswith(
-                                    ".image_description"
-                                ) and not file_path.name.endswith(
-                                    ".image_description.txt"
+                                if (
+                                    file_path.is_file()
+                                    and not file_path.name.endswith(
+                                        ".image_description"
+                                    )
+                                    and not file_path.name.endswith(
+                                        ".image_description.txt"
+                                    )
                                 ):
-                                    success, was_skipped, msg = self.upload_file_to_workspace(
-                                        file_path, workspace_folder.name
+                                    success, was_skipped, msg = (
+                                        self.upload_file_to_workspace(
+                                            file_path, workspace_folder.name
+                                        )
                                     )
                                     if success:
                                         uploaded += 1
@@ -263,13 +270,19 @@ class InfoHubFileManager:
                         if workspace_folder.is_dir():
                             workspaces_processed += 1
                             for file_path in workspace_folder.iterdir():
-                                if file_path.is_file() and not file_path.name.endswith(
-                                    ".image_description"
-                                ) and not file_path.name.endswith(
-                                    ".image_description.txt"
+                                if (
+                                    file_path.is_file()
+                                    and not file_path.name.endswith(
+                                        ".image_description"
+                                    )
+                                    and not file_path.name.endswith(
+                                        ".image_description.txt"
+                                    )
                                 ):
-                                    success, was_skipped, msg = self.upload_file_to_workspace(
-                                        file_path, workspace_folder.name
+                                    success, was_skipped, msg = (
+                                        self.upload_file_to_workspace(
+                                            file_path, workspace_folder.name
+                                        )
                                     )
                                     if success:
                                         uploaded += 1
@@ -317,7 +330,9 @@ class InfoHubFileManager:
             ],
         }
 
-        logger.info(f"Sending {image_path.name} to Ollama Cloud ({self.ollama_model})...")
+        logger.info(
+            f"Sending {image_path.name} to Ollama Cloud ({self.ollama_model})..."
+        )
         response = requests.post(url, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
         data = response.json()
@@ -349,7 +364,16 @@ class InfoHubFileManager:
                 "message": f"Root path does not exist: {self.watched_root}",
             }
 
-        image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
+        image_extensions = {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".bmp",
+            ".webp",
+            ".tiff",
+            ".tif",
+        }
         processed = 0
         skipped = 0
         errors = []
@@ -358,21 +382,27 @@ class InfoHubFileManager:
         images_to_process = []
         for item in root_path.iterdir():
             if item.is_dir() and (
-                item.name.startswith("Infohub")
-                or item.name.startswith("AnythingLLM")
+                item.name.startswith("Infohub") or item.name.startswith("AnythingLLM")
             ):
                 for workspace_folder in item.iterdir():
                     if workspace_folder.is_dir():
                         for file_path in workspace_folder.iterdir():
-                            if file_path.is_file() and file_path.suffix.lower() in image_extensions:
-                                desc_file = file_path.with_suffix(".image_description.txt")
+                            if (
+                                file_path.is_file()
+                                and file_path.suffix.lower() in image_extensions
+                            ):
+                                desc_file = file_path.with_suffix(
+                                    ".image_description.txt"
+                                )
                                 if desc_file.exists():
                                     skipped += 1
                                 else:
                                     images_to_process.append(file_path)
 
         total_images = len(images_to_process) + skipped
-        logger.info(f"Found {total_images} images: {len(images_to_process)} to process, {skipped} already have descriptions")
+        logger.info(
+            f"Found {total_images} images: {len(images_to_process)} to process, {skipped} already have descriptions"
+        )
 
         if not images_to_process:
             return {
@@ -384,7 +414,9 @@ class InfoHubFileManager:
 
         for idx, file_path in enumerate(images_to_process, 1):
             desc_file = file_path.with_suffix(".image_description.txt")
-            logger.info(f"[{idx}/{len(images_to_process)}] Processing {file_path.name}...")
+            logger.info(
+                f"[{idx}/{len(images_to_process)}] Processing {file_path.name}..."
+            )
 
             try:
                 description = self._generate_image_description(file_path)
@@ -392,7 +424,9 @@ class InfoHubFileManager:
                 with open(desc_file, "w", encoding="utf-8") as f:
                     f.write(description)
 
-                logger.info(f"[{idx}/{len(images_to_process)}] Created description for {file_path.name}")
+                logger.info(
+                    f"[{idx}/{len(images_to_process)}] Created description for {file_path.name}"
+                )
                 processed += 1
 
             except Exception as e:
@@ -497,10 +531,16 @@ def main(page: ft.Page):
             col={"xs": 6, "sm": 6, "md": 3, "lg": 3, "xl": 3},
         )
 
-    workspaces_stat = create_stat_card("0", "Workspaces", Icons.FOLDER_COPY, Colors.BLUE_500)
+    workspaces_stat = create_stat_card(
+        "0", "Workspaces", Icons.FOLDER_COPY, Colors.BLUE_500
+    )
     files_stat = create_stat_card("0", "Archivos", Icons.DESCRIPTION, Colors.GREEN_500)
-    uploaded_stat = create_stat_card("0", "Subidos", Icons.CLOUD_UPLOAD, Colors.PURPLE_500)
-    pending_stat = create_stat_card("0", "Pendientes", Icons.SCHEDULE, Colors.ORANGE_500)
+    uploaded_stat = create_stat_card(
+        "0", "Subidos", Icons.CLOUD_UPLOAD, Colors.PURPLE_500
+    )
+    pending_stat = create_stat_card(
+        "0", "Pendientes", Icons.SCHEDULE, Colors.ORANGE_500
+    )
 
     def update_stats(scan_result=None):
         if scan_result and scan_result.get("status") == "success":
@@ -549,11 +589,15 @@ def main(page: ft.Page):
         page.update()
 
     # --- Operation Cards ---
-    def create_operation_card(icon, title, description, on_click, color, badge_text=None):
+    def create_operation_card(
+        icon, title, description, on_click, color, badge_text=None
+    ):
         badge = None
         if badge_text:
             badge = ft.Container(
-                content=ft.Text(badge_text, size=10, weight=ft.FontWeight.BOLD, color=Colors.WHITE),
+                content=ft.Text(
+                    badge_text, size=10, weight=ft.FontWeight.BOLD, color=Colors.WHITE
+                ),
                 bgcolor=color,
                 border_radius=12,
                 padding=ft.padding.Padding.symmetric(horizontal=8, vertical=2),
@@ -600,7 +644,9 @@ def main(page: ft.Page):
                                 bgcolor=color,
                                 color=Colors.WHITE,
                                 shape=ft.RoundedRectangleBorder(radius=8),
-                                padding=ft.padding.Padding.symmetric(horizontal=16, vertical=10),
+                                padding=ft.padding.Padding.symmetric(
+                                    horizontal=16, vertical=10
+                                ),
                             ),
                         ),
                     ],
@@ -681,7 +727,12 @@ def main(page: ft.Page):
         title=ft.Text("Confirmar Operacion"),
         content=ft.Text("Estas seguro de que deseas ejecutar esta operacion?"),
         actions=[
-            ft.TextButton("Cancelar", on_click=lambda e: setattr(confirm_dialog, "open", False) or page.update()),
+            ft.TextButton(
+                "Cancelar",
+                on_click=lambda e: (
+                    setattr(confirm_dialog, "open", False) or page.update()
+                ),
+            ),
             ft.FilledButton("Confirmar", on_click=lambda e: None),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
@@ -709,7 +760,12 @@ def main(page: ft.Page):
         title=ft.Text("Workspaces Encontrados"),
         content=ft.Container(width=500, height=400),
         actions=[
-            ft.TextButton("Cerrar", on_click=lambda e: setattr(explorer_dialog, "open", False) or page.update()),
+            ft.TextButton(
+                "Cerrar",
+                on_click=lambda e: (
+                    setattr(explorer_dialog, "open", False) or page.update()
+                ),
+            ),
         ],
     )
     page.overlay.append(explorer_dialog)
@@ -746,7 +802,11 @@ def main(page: ft.Page):
                     )
                 if len(data["files"]) > 5:
                     files_chips.append(
-                        ft.Text(f"+{len(data['files']) - 5} mas", size=11, color=Colors.GREY_500)
+                        ft.Text(
+                            f"+{len(data['files']) - 5} mas",
+                            size=11,
+                            color=Colors.GREY_500,
+                        )
                     )
 
                 workspace_items.append(
@@ -755,12 +815,23 @@ def main(page: ft.Page):
                             [
                                 ft.Row(
                                     [
-                                        ft.Icon(Icons.FOLDER, color=Colors.BLUE_500, size=20),
-                                        ft.Text(name, size=14, weight=ft.FontWeight.BOLD),
+                                        ft.Icon(
+                                            Icons.FOLDER, color=Colors.BLUE_500, size=20
+                                        ),
+                                        ft.Text(
+                                            name, size=14, weight=ft.FontWeight.BOLD
+                                        ),
                                         ft.Container(expand=True),
-                                        ft.Badge(
-                                            label=ft.Text(f"{data['file_count']}", size=11, weight=ft.FontWeight.BOLD),
-                                            small_size=True,
+                                        ft.Container(
+                                            content=ft.Text(
+                                                f"{data['file_count']}",
+                                                size=11,
+                                                weight=ft.FontWeight.BOLD,
+                                                color=Colors.WHITE,
+                                            ),
+                                            bgcolor=Colors.BLUE_700,
+                                            padding=8,
+                                            border_radius=10,
                                         ),
                                     ],
                                     spacing=8,
@@ -771,7 +842,14 @@ def main(page: ft.Page):
                                     spacing=4,
                                     run_spacing=4,
                                     wrap=True,
-                                ) if files_chips else ft.Text("Sin archivos", size=11, color=Colors.GREY_400, italic=True),
+                                )
+                                if files_chips
+                                else ft.Text(
+                                    "Sin archivos",
+                                    size=11,
+                                    color=Colors.GREY_400,
+                                    italic=True,
+                                ),
                             ],
                             spacing=6,
                         ),
@@ -809,7 +887,10 @@ def main(page: ft.Page):
         else:
             set_status(f"✗ {operation_name} fallo", Colors.RED_500)
             add_log(f"{operation_name}: {result.get('message', str(result))}", "error")
-            show_snackbar(f"Error en {operation_name}: {result.get('message', '')}", Colors.RED_700)
+            show_snackbar(
+                f"Error en {operation_name}: {result.get('message', '')}",
+                Colors.RED_700,
+            )
 
         logger.info(f"{operation_name}: {result}")
         nonlocal is_processing
@@ -825,18 +906,31 @@ def main(page: ft.Page):
                 return
 
             def execute():
-                nonlocal is_processing
+                import threading
+                import asyncio
+
+                async def run_async():
+                    nonlocal is_processing
+                    try:
+                        if asyncio.iscoroutinefunction(fn):
+                            result = await fn()
+                        else:
+                            result = fn()
+                        log_operation(name, result)
+                        if name == "Escanear Archivos":
+                            update_stats(result)
+                            show_workspaces(result)
+                    except Exception as ex:
+                        log_operation(name, {"status": "error", "message": str(ex)})
+                    finally:
+                        is_processing = False
+                        set_status("Sistema listo", Colors.GREEN_500)
+
                 is_processing = True
                 set_status(f"Ejecutando: {name}...", Colors.BLUE_500, loading=True)
                 add_log(f"Iniciando: {name}...", "info")
-                try:
-                    result = fn()
-                    log_operation(name, result)
-                    if name == "Escanear Archivos":
-                        update_stats(result)
-                        show_workspaces(result)
-                except Exception as ex:
-                    log_operation(name, {"status": "error", "message": str(ex)})
+
+                page.run_task(run_async)
 
             if confirm:
                 show_confirm(execute, dialog_title, dialog_msg)
@@ -887,8 +981,15 @@ def main(page: ft.Page):
         leading_width=56,
         title=ft.Column(
             [
-                ft.Text("InfoHub File Manager", size=18, weight=ft.FontWeight.BOLD, color=Colors.WHITE),
-                ft.Text("Sincronizacion con AnythingLLM", size=11, color=Colors.BLUE_100),
+                ft.Text(
+                    "InfoHub File Manager",
+                    size=18,
+                    weight=ft.FontWeight.BOLD,
+                    color=Colors.WHITE,
+                ),
+                ft.Text(
+                    "Sincronizacion con AnythingLLM", size=11, color=Colors.BLUE_100
+                ),
             ],
             spacing=0,
         ),
@@ -969,8 +1070,15 @@ def main(page: ft.Page):
                         [
                             ft.Row(
                                 [
-                                    ft.Icon(Icons.TERMINAL, color=Colors.GREY_600, size=18),
-                                    ft.Text("Registro de Operaciones", size=14, weight=ft.FontWeight.BOLD, color=Colors.GREY_700),
+                                    ft.Icon(
+                                        Icons.TERMINAL, color=Colors.GREY_600, size=18
+                                    ),
+                                    ft.Text(
+                                        "Registro de Operaciones",
+                                        size=14,
+                                        weight=ft.FontWeight.BOLD,
+                                        color=Colors.GREY_700,
+                                    ),
                                 ],
                                 spacing=8,
                             ),
@@ -1004,7 +1112,12 @@ def main(page: ft.Page):
                 ft.Icon(Icons.LINK, size=16, color=Colors.BLUE_500),
                 ft.Column(
                     [
-                        ft.Text("API URL", size=11, color=Colors.GREY_500, weight=ft.FontWeight.W_500),
+                        ft.Text(
+                            "API URL",
+                            size=11,
+                            color=Colors.GREY_500,
+                            weight=ft.FontWeight.W_500,
+                        ),
                         ft.Text(manager.base_url, size=13, color=Colors.GREY_800),
                     ],
                     spacing=0,
@@ -1017,8 +1130,17 @@ def main(page: ft.Page):
                 ft.Icon(Icons.MODEL_TRAINING, size=16, color=Colors.PURPLE_500),
                 ft.Column(
                     [
-                        ft.Text("Ollama", size=11, color=Colors.GREY_500, weight=ft.FontWeight.W_500),
-                        ft.Text(f"{manager.ollama_url} ({manager.ollama_model})", size=13, color=Colors.GREY_800),
+                        ft.Text(
+                            "Ollama",
+                            size=11,
+                            color=Colors.GREY_500,
+                            weight=ft.FontWeight.W_500,
+                        ),
+                        ft.Text(
+                            f"{manager.ollama_url} ({manager.ollama_model})",
+                            size=13,
+                            color=Colors.GREY_800,
+                        ),
                     ],
                     spacing=0,
                 ),
@@ -1030,8 +1152,17 @@ def main(page: ft.Page):
                 ft.Icon(Icons.FOLDER_OPEN, size=16, color=Colors.GREEN_500),
                 ft.Column(
                     [
-                        ft.Text("Raiz Observada", size=11, color=Colors.GREY_500, weight=ft.FontWeight.W_500),
-                        ft.Text(manager.watched_root or "No configurado", size=13, color=Colors.GREY_800),
+                        ft.Text(
+                            "Raiz Observada",
+                            size=11,
+                            color=Colors.GREY_500,
+                            weight=ft.FontWeight.W_500,
+                        ),
+                        ft.Text(
+                            manager.watched_root or "No configurado",
+                            size=13,
+                            color=Colors.GREY_800,
+                        ),
                     ],
                     spacing=0,
                 ),
@@ -1043,11 +1174,20 @@ def main(page: ft.Page):
                 ft.Icon(Icons.IMAGE, size=16, color=Colors.PINK_500),
                 ft.Column(
                     [
-                        ft.Text("Descripciones de Imagenes", size=11, color=Colors.GREY_500, weight=ft.FontWeight.W_500),
                         ft.Text(
-                            "Habilitado" if manager.image_description_active else "Deshabilitado",
+                            "Descripciones de Imagenes",
+                            size=11,
+                            color=Colors.GREY_500,
+                            weight=ft.FontWeight.W_500,
+                        ),
+                        ft.Text(
+                            "Habilitado"
+                            if manager.image_description_active
+                            else "Deshabilitado",
                             size=13,
-                            color=Colors.GREEN_700 if manager.image_description_active else Colors.RED_700,
+                            color=Colors.GREEN_700
+                            if manager.image_description_active
+                            else Colors.RED_700,
                         ),
                     ],
                     spacing=0,
@@ -1064,7 +1204,12 @@ def main(page: ft.Page):
                     ft.Row(
                         [
                             ft.Icon(Icons.SETTINGS, color=Colors.GREY_600, size=18),
-                            ft.Text("Configuracion", size=14, weight=ft.FontWeight.BOLD, color=Colors.GREY_700),
+                            ft.Text(
+                                "Configuracion",
+                                size=14,
+                                weight=ft.FontWeight.BOLD,
+                                color=Colors.GREY_700,
+                            ),
                         ],
                         spacing=8,
                     ),
@@ -1103,7 +1248,12 @@ def main(page: ft.Page):
                         [
                             ft.Row(
                                 [
-                                    ft.Text("Operaciones", size=18, weight=ft.FontWeight.BOLD, color=Colors.GREY_800),
+                                    ft.Text(
+                                        "Operaciones",
+                                        size=18,
+                                        weight=ft.FontWeight.BOLD,
+                                        color=Colors.GREY_800,
+                                    ),
                                     ft.Container(expand=True),
                                     ft.Text(
                                         f"v1.0 | {datetime.now().strftime('%Y-%m-%d')}",
@@ -1157,8 +1307,8 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.app(
-        target=main,
+    ft.run(
+        main,
         view=ft.AppView.WEB_BROWSER,
         port=int(os.getenv("APP_PORT", 8000)),
     )
