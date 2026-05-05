@@ -1,6 +1,6 @@
 """
 InfoHub File Manager - Flet Web Dashboard
-Panel de control para sincronizar archivos con AnythingLLM/InfoHub
+Panel de control para sincronizar archivos con InfoHub/InfoHub
 """
 
 import os
@@ -30,11 +30,11 @@ logger = logging.getLogger(__name__)
 
 
 class InfoHubFileManager:
-    """Manages file synchronization with AnythingLLM/InfoHub"""
+    """Manages file synchronization with InfoHub/InfoHub"""
 
     def __init__(self):
-        self.api_key = os.getenv("ANYTHINGLLM_API_KEY")
-        self.base_url = os.getenv("ANYTHINGLLM_BASE_URL", "http://localhost:3000")
+        self.api_key = os.getenv("INFOHUB_API_KEY")
+        self.base_url = os.getenv("INFOHUB_BASE_URL", "http://localhost:3000")
         self.ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         self.ollama_model = os.getenv("OLLAMA_MODEL", "llava:latest")
         self.image_description_active = (
@@ -58,7 +58,7 @@ class InfoHubFileManager:
         total_files = 0
         for item in root_path.iterdir():
             if item.is_dir() and (
-                item.name.startswith("Infohub") or item.name.startswith("AnythingLLM")
+                item.name.startswith("Infohub") or item.name.startswith("InfoHub")
             ):
                 for workspace_folder in item.iterdir():
                     if workspace_folder.is_dir():
@@ -146,7 +146,7 @@ class InfoHubFileManager:
     def upload_file_to_workspace(
         self, file_path: Path, workspace_name: str, skip_if_exists: bool = True
     ) -> tuple:
-        """Upload a single file to AnythingLLM workspace
+        """Upload a single file to InfoHub workspace
 
         Returns:
             tuple: (success: bool, skipped: bool, message: str)
@@ -203,7 +203,7 @@ class InfoHubFileManager:
             for item in root_path.iterdir():
                 if item.is_dir() and (
                     item.name.startswith("Infohub")
-                    or item.name.startswith("AnythingLLM")
+                    or item.name.startswith("InfoHub")
                 ):
                     for workspace_folder in item.iterdir():
                         if workspace_folder.is_dir():
@@ -264,7 +264,7 @@ class InfoHubFileManager:
             for item in root_path.iterdir():
                 if item.is_dir() and (
                     item.name.startswith("Infohub")
-                    or item.name.startswith("AnythingLLM")
+                    or item.name.startswith("InfoHub")
                 ):
                     for workspace_folder in item.iterdir():
                         if workspace_folder.is_dir():
@@ -382,7 +382,7 @@ class InfoHubFileManager:
         images_to_process = []
         for item in root_path.iterdir():
             if item.is_dir() and (
-                item.name.startswith("Infohub") or item.name.startswith("AnythingLLM")
+                item.name.startswith("Infohub") or item.name.startswith("InfoHub")
             ):
                 for workspace_folder in item.iterdir():
                     if workspace_folder.is_dir():
@@ -536,10 +536,10 @@ def main(page: ft.Page):
     )
     files_stat = create_stat_card("0", "Archivos", Icons.DESCRIPTION, Colors.GREEN_500)
     uploaded_stat = create_stat_card(
-        "0", "Subidos", Icons.CLOUD_UPLOAD, Colors.PURPLE_500
+        "0", "Subidos", Icons.CLOUD_UPLOAD, Colors.BLUE_500
     )
     pending_stat = create_stat_card(
-        "0", "Pendientes", Icons.SCHEDULE, Colors.ORANGE_500
+        "0", "Pendientes", Icons.SCHEDULE, Colors.GREEN_500
     )
 
     def update_stats(scan_result=None):
@@ -672,8 +672,8 @@ def main(page: ft.Page):
         color = {
             "info": Colors.BLUE_500,
             "success": Colors.GREEN_500,
-            "warning": Colors.ORANGE_500,
-            "error": Colors.RED_500,
+            "warning": Colors.GREEN_500,
+            "error": Colors.BLUE_500,
         }.get(level, Colors.GREY_500)
 
         log_entry = ft.Container(
@@ -719,6 +719,88 @@ def main(page: ft.Page):
 
     def clear_logs(e=None):
         logs_list.controls.clear()
+        page.update()
+
+    # --- Configuration Dialog ---
+    config_api_key = ft.TextField(
+        value=manager.api_key or "",
+        password=True,
+        can_reveal_password=True,
+        label="InfoHub API Key",
+    )
+    config_base_url = ft.TextField(value=manager.base_url, label="InfoHub URL")
+    config_ollama_url = ft.TextField(value=manager.ollama_url, label="Ollama URL")
+    config_ollama_model = ft.TextField(value=manager.ollama_model, label="Ollama Model")
+    config_image_active = ft.Switch(
+        value=manager.image_description_active, label="Descripciones de Imagenes"
+    )
+    config_watched_root = ft.TextField(
+        value=manager.watched_root or "", label="Carpetas monitoreadas"
+    )
+
+    def save_config(e):
+        import subprocess
+        import os
+
+        env = os.environ.copy()
+        env["INFOHUB_API_KEY"] = config_api_key.value
+        env["INFOHUB_BASE_URL"] = config_base_url.value
+        env["OLLAMA_BASE_URL"] = config_ollama_url.value
+        env["OLLAMA_MODEL"] = config_ollama_model.value
+        env["IMAGE_DESCRIPTION_ACTIVATE"] = "true" if config_image_active.value else "false"
+        env["WATCHED_FOLDERS_ROOT"] = config_watched_root.value
+
+        with open(".env", "w") as f:
+            f.write(f"INFOHUB_API_KEY={config_api_key.value}\n")
+            f.write(f"INFOHUB_BASE_URL={config_base_url.value}\n")
+            f.write(f"OLLAMA_BASE_URL={config_ollama_url.value}\n")
+            f.write(f"OLLAMA_MODEL={config_ollama_model.value}\n")
+            f.write(f"IMAGE_DESCRIPTION_ACTIVATE={'true' if config_image_active.value else 'false'}\n")
+            f.write(f"WATCHED_FOLDERS_ROOT={config_watched_root.value}\n")
+
+        manager.api_key = config_api_key.value
+        manager.base_url = config_base_url.value
+        manager.ollama_url = config_ollama_url.value
+        manager.ollama_model = config_ollama_model.value
+        manager.image_description_active = config_image_active.value
+        manager.watched_root = config_watched_root.value
+
+        config_dialog.open = False
+        show_snackbar("Configuracion guardada. Reinicia la app para aplicar cambios.", Colors.GREEN_700)
+        page.update()
+
+    config_dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Text("Configuracion"),
+        content=ft.Container(
+            width=400,
+            content=ft.Column(
+                [
+                    config_api_key,
+                    config_base_url,
+                    config_ollama_url,
+                    config_ollama_model,
+                    config_image_active,
+                    config_watched_root,
+                ],
+                spacing=10,
+            ),
+        ),
+        actions=[
+            ft.TextButton(
+                "Cancelar",
+                on_click=lambda e: (
+                    setattr(config_dialog, "open", False) or page.update()
+                ),
+            ),
+            ft.FilledButton("Guardar", on_click=save_config),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+    page.overlay.append(config_dialog)
+
+    def show_config(e):
+        config_dialog.open = True
         page.update()
 
     # --- Confirmation Dialog ---
@@ -881,15 +963,15 @@ def main(page: ft.Page):
             add_log(f"{operation_name}: {result.get('message', 'OK')}", "success")
             show_snackbar(f"{operation_name} completado exitosamente", Colors.GREEN_700)
         elif level == "warning":
-            set_status(f"⚠ {operation_name} - advertencia", Colors.ORANGE_500)
+            set_status(f"⚠ {operation_name} - advertencia", Colors.BLUE_500)
             add_log(f"{operation_name}: {result.get('message', 'Warning')}", "warning")
-            show_snackbar(result.get("message", "Advertencia"), Colors.ORANGE_700)
+            show_snackbar(result.get("message", "Advertencia"), Colors.BLUE_700)
         else:
-            set_status(f"✗ {operation_name} fallo", Colors.RED_500)
+            set_status(f"✗ {operation_name} fallo", Colors.BLUE_500)
             add_log(f"{operation_name}: {result.get('message', str(result))}", "error")
             show_snackbar(
                 f"Error en {operation_name}: {result.get('message', '')}",
-                Colors.RED_700,
+                Colors.BLUE_700,
             )
 
         logger.info(f"{operation_name}: {result}")
@@ -902,7 +984,7 @@ def main(page: ft.Page):
         def handler(e):
             nonlocal is_processing
             if is_processing:
-                show_snackbar("Ya hay una operacion en curso", Colors.ORANGE_700)
+                show_snackbar("Ya hay una operacion en curso", Colors.BLUE_700)
                 return
 
             def execute():
@@ -947,14 +1029,6 @@ def main(page: ft.Page):
         dialog_msg="Se subiran los archivos nuevos y se limpiaran los eliminados. ¿Continuar?",
     )
 
-    on_sort_files = wrap_operation(
-        "Ordenar Archivos",
-        manager.sort_files,
-        confirm=True,
-        dialog_title="Ordenar Archivos",
-        dialog_msg="Se organizaran los archivos en sus workspaces correspondientes. ¿Continuar?",
-    )
-
     on_clean_folders = wrap_operation(
         "Limpiar Carpetas",
         manager.clean_folders,
@@ -988,7 +1062,7 @@ def main(page: ft.Page):
                     color=Colors.WHITE,
                 ),
                 ft.Text(
-                    "Sincronizacion con AnythingLLM", size=11, color=Colors.BLUE_100
+                    "Sincronizacion con InfoHub", size=11, color=Colors.BLUE_100
                 ),
             ],
             spacing=0,
@@ -1009,10 +1083,7 @@ def main(page: ft.Page):
                 icon=Icons.SETTINGS,
                 icon_color=Colors.WHITE,
                 tooltip="Configuracion",
-                on_click=lambda e: show_snackbar(
-                    f"API: {manager.base_url} | Ollama: {manager.ollama_url}",
-                    Colors.BLUE_700,
-                ),
+                on_click=show_config,
             ),
         ],
     )
@@ -1028,32 +1099,25 @@ def main(page: ft.Page):
                 Colors.BLUE_500,
             ),
             create_operation_card(
-                Icons.FOLDER_SHARED,
-                "Ordenar Archivos",
-                "Organizar automaticamente documentos en las carpetas de workspace correctas",
-                on_sort_files,
-                Colors.GREEN_500,
-            ),
-            create_operation_card(
                 Icons.CLEANING_SERVICES,
                 "Limpiar Carpetas",
                 "Eliminar workspaces vacios de InfoHub",
                 on_clean_folders,
-                Colors.ORANGE_500,
+                Colors.BLUE_500,
             ),
             create_operation_card(
                 Icons.SEARCH,
                 "Escanear Archivos",
                 "Previsualizar contenido de carpetas sin subir",
                 on_scan_files,
-                Colors.PURPLE_500,
+                Colors.BLUE_500,
             ),
             create_operation_card(
                 Icons.IMAGE,
                 "Descripciones IA",
                 "Generar descripciones con IA para imagenes (requiere Ollama)",
                 on_create_descriptions,
-                Colors.PINK_500,
+                Colors.GREEN_500,
                 badge_text="IA",
             ),
         ],
@@ -1127,7 +1191,7 @@ def main(page: ft.Page):
         ),
         ft.Row(
             [
-                ft.Icon(Icons.MODEL_TRAINING, size=16, color=Colors.PURPLE_500),
+                ft.Icon(Icons.MODEL_TRAINING, size=16, color=Colors.BLUE_500),
                 ft.Column(
                     [
                         ft.Text(
@@ -1171,7 +1235,7 @@ def main(page: ft.Page):
         ),
         ft.Row(
             [
-                ft.Icon(Icons.IMAGE, size=16, color=Colors.PINK_500),
+                ft.Icon(Icons.IMAGE, size=16, color=Colors.GREEN_500),
                 ft.Column(
                     [
                         ft.Text(
@@ -1185,9 +1249,9 @@ def main(page: ft.Page):
                             if manager.image_description_active
                             else "Deshabilitado",
                             size=13,
-                            color=Colors.GREEN_700
+                            color=Colors.BLUE_500
                             if manager.image_description_active
-                            else Colors.RED_700,
+                            else Colors.BLUE_500,
                         ),
                     ],
                     spacing=0,
