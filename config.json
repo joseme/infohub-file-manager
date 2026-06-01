@@ -1,0 +1,12 @@
+{
+  "app_title": "InfoHub File Manager",
+  "app_port": 8500,
+  "log_level": "INFO",
+  "log_file": "infohub.log",
+  "anythingllm_api_key": "",
+  "anythingllm_base_url": "http://localhost:3000",
+  "ollama_base_url": "http://localhost:11434",
+  "ollama_model": "llava:latest",
+  "image_description_active": true,
+  "watched_folders_root": ""
+}
