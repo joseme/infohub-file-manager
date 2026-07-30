@@ -4,9 +4,9 @@
   "log_level": "INFO",
   "log_file": "infohub.log",
   "anythingllm_api_key": "",
-  "anythingllm_base_url": "http://localhost:3000",
+  "anythingllm_base_url": "https://info.knowhub.tech",
   "ollama_base_url": "http://localhost:11434",
-  "ollama_model": "llava:latest",
+  "ollama_model": "gemma3:1b",
   "image_description_active": true,
-  "watched_folders_root": ""
+  "watched_folders_root": "/home/jose/Documentos/"
 }

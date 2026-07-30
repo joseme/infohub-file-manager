@@ -73,8 +73,7 @@ OLLAMA_MODEL=bkudler/llava-phi3
 IMAGE_DESCRIPTION_ACTIVATE=true
 
 # Application Settings
-APP_HOST=localhost
-APP_PORT=8000
+APP_PORT=8500
 APP_TITLE=InfoHub File Manager
 
 # Watched Folders Configuration
@@ -135,7 +134,7 @@ http://localhost:8000
 
 | Botón | Acción |
 |-------|--------|
-| **📤 Carga Completa y Limpieza** | Sube archivos nuevos, actualiza modificados y elimina los borrados. |
+| **📤 Carga Completa y Limpieza** | Crea workspaces automáticamente, sube archivos nuevos, elimina los borrados y actualiza embeddings. |
 | **🗂️ Ordenar Archivos** | Organiza documentos en los workspaces correspondientes. |
 | **🧹 Limpiar Carpetas** | Elimina workspaces vacíos. |
 | **🔍 Escanear Archivos** | Previsualiza carpetas y workspaces sin subir nada. |
@@ -195,6 +194,7 @@ curl http://localhost:11434/api/tags
 
 - **Nunca subas tu archivo `.env`** al repositorio. Está protegido por `.gitignore`.
 - Guarda tus claves API (`ANYTHINGLLM_API_KEY`) de forma segura y rota periódicamente.
+- **Las variables de entorno tienen prioridad** sobre `config.json`. Si existe `ANYTHINGLLM_API_KEY` en `.env`, ese valor se usa aunque `config.json` tenga otro distinto.
 - Si usas Ollama en red, asegúrate de restringir el acceso al puerto `11434`.
 
 ---

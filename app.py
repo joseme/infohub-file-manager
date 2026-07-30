@@ -6,6 +6,7 @@ Panel de control para sincronizar archivos con AnythingLLM/InfoHub
 import os
 import base64
 import logging
+import threading
 import requests
 from pathlib import Path
 from datetime import datetime
@@ -35,12 +36,12 @@ class InfoHubFileManager:
 
     def __init__(self, config=None):
         if config:
-            self.api_key = config.get("anythingllm_api_key") or os.getenv("ANYTHINGLLM_API_KEY", "")
-            self.base_url = config.get("anythingllm_base_url") or os.getenv("ANYTHINGLLM_BASE_URL", "http://localhost:3000")
-            self.ollama_url = config.get("ollama_base_url") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            self.ollama_model = config.get("ollama_model") or os.getenv("OLLAMA_MODEL", "llava:latest")
+            self.api_key = os.getenv("ANYTHINGLLM_API_KEY") or config.get("anythingllm_api_key", "")
+            self.base_url = os.getenv("ANYTHINGLLM_BASE_URL") or config.get("anythingllm_base_url", "http://localhost:3000")
+            self.ollama_url = os.getenv("OLLAMA_BASE_URL") or config.get("ollama_base_url", "http://localhost:11434")
+            self.ollama_model = os.getenv("OLLAMA_MODEL") or config.get("ollama_model", "llava:latest")
             self.image_description_active = config.get("image_description_active", True)
-            self.watched_root = config.get("watched_folders_root") or os.getenv("WATCHED_FOLDERS_ROOT", "")
+            self.watched_root = os.getenv("WATCHED_FOLDERS_ROOT") or config.get("watched_folders_root", "")
         else:
             self.api_key = os.getenv("ANYTHINGLLM_API_KEY", "")
             self.base_url = os.getenv("ANYTHINGLLM_BASE_URL", "http://localhost:3000")
@@ -96,8 +97,15 @@ class InfoHubFileManager:
         """Convert workspace name to slug format"""
         return workspace_name.lower().replace(" ", "-").replace("_", "-")
 
-    def get_workspace_documents(self, workspace_name: str) -> set:
-        """Get set of document filenames already in workspace"""
+    def get_workspace_documents(self, workspace_name: str) -> dict:
+        """Get documents in a workspace.
+
+        Returns:
+            dict with:
+                - "base_names": set of base filenames (for existence checks)
+                - "doc_names": dict mapping base_name -> full_doc_name (for deletion)
+                - "raw_docs": list of raw document dicts
+        """
         try:
             slug = self.get_workspace_slug(workspace_name)
             url = f"{self.base_url}/api/v1/workspace/{slug}"
@@ -113,7 +121,9 @@ class InfoHubFileManager:
                 # Navigate response structure
                 if isinstance(data, dict):
                     workspace = data.get("workspace", [])
-                    if isinstance(workspace, list) and len(workspace) > 0:
+                    if isinstance(workspace, list):
+                        if len(workspace) == 0:
+                            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": False}
                         workspace = workspace[0]
                     documents = (
                         workspace.get("documents", [])
@@ -127,29 +137,148 @@ class InfoHubFileManager:
                         else []
                     )
 
-                # Extract filenames from docpath
-                filenames = set()
+                base_names = set()
+                doc_names = {}
                 for doc in documents:
                     if isinstance(doc, dict):
                         docpath = doc.get("docpath", "")
                         if docpath:
-                            filenames.add(docpath.split("/")[-1].replace(".json", ""))
-                return filenames
+                            filename = docpath.split("/")[-1]
+                            base_name = filename.replace(".json", "")
+                            base_names.add(base_name)
+                            doc_names[base_name] = filename
+
+                return {
+                    "base_names": base_names,
+                    "doc_names": doc_names,
+                    "raw_docs": documents,
+                    "exists": True,
+                }
             else:
                 logger.warning(
                     f"Failed to get workspace documents: {response.status_code}"
                 )
-                return set()
+                return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": False}
         except Exception as e:
             logger.error(f"Error getting workspace documents: {e}")
-            return set()
+            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": False}
+
+    def create_workspace(self, name: str) -> bool:
+        """Create a new workspace in AnythingLLM.
+
+        Returns True if created, False if already exists or error.
+        """
+        try:
+            url = f"{self.base_url}/api/v1/workspace/new"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "accept": "application/json",
+            }
+            payload = {"name": name}
+
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
+
+            if response.status_code in (200, 201):
+                logger.info(f"Created workspace '{name}'")
+                return True
+
+            # 400 usually means workspace already exists — that's fine
+            if response.status_code == 400:
+                logger.info(f"Workspace '{name}' already exists")
+                return False
+
+            logger.warning(f"Failed to create workspace '{name}': {response.status_code} - {response.text}")
+            return False
+        except Exception as e:
+            logger.error(f"Error creating workspace '{name}': {e}")
+            return False
+
+    def _update_embeddings(self, workspace_name: str) -> bool:
+        """Trigger embedding generation for all documents in a workspace.
+
+        After uploading documents, this must be called so the vector DB
+        is updated and queries can find the documents.
+        """
+        try:
+            slug = self.get_workspace_slug(workspace_name)
+            docs = self.get_workspace_documents(workspace_name)
+            if not docs.get("exists", False):
+                logger.warning(f"Cannot update embeddings: workspace '{workspace_name}' not found")
+                return False
+
+            # Collect all server-side document paths from the workspace
+            docpaths = [
+                doc["docpath"] for doc in docs.get("raw_docs", [])
+                if isinstance(doc, dict) and doc.get("docpath")
+            ]
+            if not docpaths:
+                logger.info(f"No documents to embed in workspace '{workspace_name}'")
+                return True
+
+            url = f"{self.base_url}/api/v1/workspace/{slug}/update-embeddings"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "accept": "application/json",
+            }
+            payload = {"adds": docpaths, "deletes": []}
+
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
+            if response.status_code == 200:
+                logger.info(f"Embeddings updated for '{workspace_name}' ({len(docpaths)} docs)")
+                return True
+            else:
+                logger.warning(f"Failed to update embeddings for '{workspace_name}': {response.status_code} - {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Error updating embeddings for '{workspace_name}': {e}")
+            return False
 
     def file_exists_in_workspace(self, file_path: Path, workspace_name: str) -> bool:
         """Check if file already exists in workspace"""
-        existing_docs = self.get_workspace_documents(workspace_name)
+        docs = self.get_workspace_documents(workspace_name)
         # Check by filename without extension
+        # Must handle UUID-format docpaths: report.pdf → docpath report.abc123.json
+        # so base_name = "report.abc123" and we need to match stem "report"
         filename_without_ext = file_path.stem
-        return filename_without_ext in existing_docs
+        return any(
+            base == filename_without_ext or base.startswith(filename_without_ext + ".")
+            for base in docs["base_names"]
+        )
+
+    def delete_documents(self, doc_names: list) -> tuple:
+        """Delete documents from AnythingLLM system.
+
+        Args:
+            doc_names: List of full document names (e.g. ["report.uuid.json"])
+
+        Returns:
+            tuple: (success: bool, deleted_count: int, errors: list)
+        """
+        if not doc_names:
+            return (True, 0, [])
+
+        try:
+            url = f"{self.base_url}/api/v1/system/remove-documents"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "accept": "application/json",
+            }
+
+            logger.info(f"Deleting {len(doc_names)} documents: {doc_names}")
+            response = requests.delete(url, headers=headers, json={"names": doc_names}, timeout=30)
+
+            if response.status_code in (200, 201, 204):
+                logger.info(f"Successfully deleted {len(doc_names)} documents")
+                return (True, len(doc_names), [])
+            else:
+                logger.warning(f"Failed to delete documents: {response.status_code} - {response.text}")
+                return (False, 0, [f"HTTP {response.status_code}: {response.text}"])
+        except Exception as e:
+            logger.error(f"Error deleting documents: {e}")
+            return (False, 0, [str(e)])
 
     def upload_file_to_workspace(
         self, file_path: Path, workspace_name: str, skip_if_exists: bool = True
@@ -160,9 +289,15 @@ class InfoHubFileManager:
             tuple: (success: bool, skipped: bool, message: str)
         """
         try:
-            # Check if file already exists
-            if skip_if_exists and self.file_exists_in_workspace(
-                file_path, workspace_name
+            # Auto-create workspace if missing + check file existence
+            docs = self.get_workspace_documents(workspace_name)
+            if not docs.get("exists", True):
+                self.create_workspace(workspace_name)
+                docs = self.get_workspace_documents(workspace_name)
+
+            if skip_if_exists and any(
+                base == file_path.stem or base.startswith(file_path.stem + ".")
+                for base in docs["base_names"]
             ):
                 logger.info(f"Skipped {file_path.name} - already in {workspace_name}")
                 return (False, True, "already exists")
@@ -234,7 +369,7 @@ class InfoHubFileManager:
                                         skipped += 1
 
                                     if file_path.suffix.lower() in image_extensions:
-                                        desc_file = file_path.with_suffix(".image_description.txt")
+                                        desc_file = file_path.with_name(file_path.name + ".image_description.txt")
                                         if self.image_description_active and not desc_file.exists():
                                             try:
                                                 description = self._generate_image_description(file_path)
@@ -246,6 +381,9 @@ class InfoHubFileManager:
                                                 logger.error(f"Error creating description for {file_path.name}: {img_err}")
                                         elif desc_file.exists():
                                             images_skipped += 1
+
+                            # Update embeddings for this workspace
+                            self._update_embeddings(workspace_folder.name)
 
             return {
                 "status": "success",
@@ -281,6 +419,8 @@ class InfoHubFileManager:
 
             uploaded = 0
             skipped = 0
+            deleted = 0
+            delete_errors = []
             workspaces_processed = 0
 
             for item in root_path.iterdir():
@@ -290,7 +430,43 @@ class InfoHubFileManager:
                 ):
                     for workspace_folder in item.iterdir():
                         if workspace_folder.is_dir():
+                            workspace_name = workspace_folder.name
                             workspaces_processed += 1
+
+                            # --- Step 1: Collect local files (base names) ---
+                            local_base_names = set()
+                            for file_path in workspace_folder.iterdir():
+                                if file_path.is_file() and not file_path.name.endswith(
+                                    ".image_description"
+                                ) and not file_path.name.endswith(
+                                    ".image_description.txt"
+                                ):
+                                    local_base_names.add(file_path.stem)
+
+                            # --- Step 2: Find and delete orphaned remote documents ---
+                            docs_info = self.get_workspace_documents(workspace_name)
+                            remote_base_names = docs_info["base_names"]
+                            doc_names_map = docs_info["doc_names"]
+
+                            orphaned = [
+                                doc_names_map[base]
+                                for base in remote_base_names
+                                if base not in local_base_names and base in doc_names_map
+                            ]
+
+                            if orphaned:
+                                logger.info(
+                                    f"Orphaned documents in '{workspace_name}': {orphaned}"
+                                )
+                                success, count, errs = self.delete_documents(orphaned)
+                                if success:
+                                    deleted += count
+                                    for doc_name in orphaned:
+                                        logger.info(f"Deleted orphaned document: {doc_name}")
+                                else:
+                                    delete_errors.extend(errs)
+
+                            # --- Step 3: Upload local files ---
                             for file_path in workspace_folder.iterdir():
                                 if file_path.is_file() and not file_path.name.endswith(
                                     ".image_description"
@@ -298,20 +474,35 @@ class InfoHubFileManager:
                                     ".image_description.txt"
                                 ):
                                     success, was_skipped, msg = self.upload_file_to_workspace(
-                                        file_path, workspace_folder.name
+                                        file_path, workspace_name
                                     )
                                     if success:
                                         uploaded += 1
                                     elif was_skipped:
                                         skipped += 1
 
-            return {
-                "status": "success",
-                "message": f"{workspaces_processed} workspaces procesados, {uploaded} archivos subidos, {skipped} omitidos",
+                            # --- Step 4: Update embeddings ---
+                            self._update_embeddings(workspace_name)
+
+            result_msg = (
+                f"{workspaces_processed} workspaces procesados, {uploaded} subidos, "
+                f"{skipped} omitidos, {deleted} eliminados"
+            )
+            if delete_errors:
+                result_msg += f", {len(delete_errors)} errores al eliminar"
+
+            result = {
+                "status": "success" if not delete_errors else "warning",
+                "message": result_msg,
                 "workspaces_processed": workspaces_processed,
                 "uploaded": uploaded,
                 "skipped": skipped,
+                "deleted": deleted,
             }
+            if delete_errors:
+                result["delete_errors"] = delete_errors
+
+            return result
         except Exception as e:
             logger.error(f"Error in full upload: {e}")
             return {"status": "error", "message": str(e)}
@@ -394,7 +585,7 @@ class InfoHubFileManager:
                     if workspace_folder.is_dir():
                         for file_path in workspace_folder.iterdir():
                             if file_path.is_file() and file_path.suffix.lower() in image_extensions:
-                                desc_file = file_path.with_suffix(".image_description.txt")
+                                desc_file = file_path.with_name(file_path.name + ".image_description.txt")
                                 if desc_file.exists():
                                     skipped += 1
                                 else:
@@ -412,7 +603,7 @@ class InfoHubFileManager:
             }
 
         for idx, file_path in enumerate(images_to_process, 1):
-            desc_file = file_path.with_suffix(".image_description.txt")
+            desc_file = file_path.with_name(file_path.name + ".image_description.txt")
             logger.info(f"[{idx}/{len(images_to_process)}] Processing {file_path.name}...")
 
             try:
@@ -544,14 +735,37 @@ def _main(page: ft.Page):
     uploaded_stat = create_stat_card("0", "Subidos", Icons.CLOUD_UPLOAD, Colors.PURPLE_500)
     pending_stat = create_stat_card("0", "Pendientes", Icons.SCHEDULE, Colors.ORANGE_500)
 
-    def update_stats(scan_result=None):
-        if scan_result and scan_result.get("status") == "success":
+    def update_stats(result=None):
+        if not result or result.get("status") not in ("success", "warning"):
+            return
+
+        # Scan results: workspaces & file counts
+        if "total_workspaces" in result:
             workspaces_stat.content.content.controls[1].controls[0].value = str(
-                scan_result.get("total_workspaces", 0)
+                result.get("total_workspaces", 0)
             )
+        if "total_files" in result:
             files_stat.content.content.controls[1].controls[0].value = str(
-                scan_result.get("total_files", 0)
+                result.get("total_files", 0)
             )
+
+        # Upload results: uploaded file count
+        if "uploaded" in result:
+            val = result.get("uploaded", 0)
+            uploaded_stat.content.content.controls[1].controls[0].value = str(val)
+
+        # Image description results: processed count
+        if "processed" in result:
+            val = result.get("processed", 0)
+            uploaded_stat.content.content.controls[1].controls[0].value = str(val)
+
+        # Pending: skipped uploads or images still needing descriptions
+        skipped_uploads = result.get("skipped", None)
+        images_skipped = result.get("images_skipped", None)
+        if skipped_uploads is not None or images_skipped is not None:
+            total_skipped = (skipped_uploads or 0) + (images_skipped or 0)
+            pending_stat.content.content.controls[1].controls[0].value = str(total_skipped)
+
         page.update()
 
     # --- Status Bar ---
@@ -818,9 +1032,11 @@ def _main(page: ft.Page):
                                         ft.Icon(Icons.FOLDER, color=Colors.BLUE_500, size=20),
                                         ft.Text(name, size=14, weight=ft.FontWeight.BOLD),
                                         ft.Container(expand=True),
-                                        ft.Badge(
-                                            label=ft.Text(f"{data['file_count']}", size=11, weight=ft.FontWeight.BOLD),
-                                            small_size=True,
+                                        ft.Container(
+                                            content=ft.Text(f"{data['file_count']}", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                            bgcolor=ft.Colors.BLUE_500,
+                                            border_radius=12,
+                                            padding=ft.padding.Padding.symmetric(horizontal=8, vertical=2),
                                         ),
                                     ],
                                     spacing=8,
@@ -929,7 +1145,7 @@ def _main(page: ft.Page):
         title=ft.Row(
             [
                 ft.Icon(Icons.TUNE, color=Colors.BLUE_500),
-                ft.Text("Configuracion", size=18, weight=ft.FontWeight.BOLD),
+                ft.Text("Configuración", size=18, weight=ft.FontWeight.BOLD),
             ],
             spacing=8,
         ),
@@ -973,19 +1189,19 @@ def _main(page: ft.Page):
                 config.set(key, ctrl.value)
 
         if config.save():
-            manager.api_key = config.get("anythingllm_api_key") or os.getenv("ANYTHINGLLM_API_KEY", "")
-            manager.base_url = config.get("anythingllm_base_url") or os.getenv("ANYTHINGLLM_BASE_URL", "http://localhost:3000")
-            manager.ollama_url = config.get("ollama_base_url") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            manager.ollama_model = config.get("ollama_model") or os.getenv("OLLAMA_MODEL", "llava:latest")
+            manager.api_key = os.getenv("ANYTHINGLLM_API_KEY") or config.get("anythingllm_api_key", "")
+            manager.base_url = os.getenv("ANYTHINGLLM_BASE_URL") or config.get("anythingllm_base_url", "http://localhost:3000")
+            manager.ollama_url = os.getenv("OLLAMA_BASE_URL") or config.get("ollama_base_url", "http://localhost:11434")
+            manager.ollama_model = os.getenv("OLLAMA_MODEL") or config.get("ollama_model", "llava:latest")
             manager.image_description_active = config.get("image_description_active", True)
-            manager.watched_root = config.get("watched_folders_root") or os.getenv("WATCHED_FOLDERS_ROOT", "")
+            manager.watched_root = os.getenv("WATCHED_FOLDERS_ROOT") or config.get("watched_folders_root", "")
             page.title = config.get("app_title", "InfoHub File Manager")
             page.update()
 
             config_dialog.open = False
             page.update()
-            show_snackbar("Configuracion guardada correctamente", Colors.GREEN_700)
-            add_log("Configuracion actualizada y guardada", "success")
+            show_snackbar("Configuración guardada correctamente", Colors.GREEN_700)
+            add_log("Configuración actualizada y guardada", "success")
             update_config_panel()
         else:
             show_snackbar("Error al guardar configuracion", Colors.RED_700)
@@ -1057,14 +1273,19 @@ def _main(page: ft.Page):
 
                 set_status(f"Ejecutando: {name}...", Colors.BLUE_500, loading=True)
                 add_log(f"Iniciando: {name}...", "info")
-                try:
-                    result = fn()
-                    log_operation(name, result, show_progress)
-                    if name == "Escanear Archivos":
-                        update_stats(result)
-                        show_workspaces(result)
-                except Exception as ex:
-                    log_operation(name, {"status": "error", "message": str(ex)}, show_progress)
+
+                def run_in_thread():
+                    try:
+                        result = fn()
+                        log_operation(name, result, show_progress)
+                        if result.get("status") in ("success", "warning"):
+                            update_stats(result)
+                            if name == "Escanear Archivos":
+                                show_workspaces(result)
+                    except Exception as ex:
+                        log_operation(name, {"status": "error", "message": str(ex)}, show_progress)
+
+                threading.Thread(target=run_in_thread, daemon=True).start()
 
             if confirm:
                 show_confirm(execute, dialog_title, dialog_msg)
@@ -1091,6 +1312,24 @@ def _main(page: ft.Page):
     )
 
     on_scan_files = wrap_operation("Escanear Archivos", manager.scan_files)
+
+    on_full_upload = wrap_operation(
+        "Carga Completa y Limpieza",
+        manager.full_upload_and_clean,
+        confirm=True,
+        dialog_title="Carga Completa y Limpieza",
+        dialog_msg="Se subiran archivos nuevos, se actualizaran los existentes y se eliminaran documentos huerfanos de workspaces. ¿Continuar?",
+        show_progress=True,
+    )
+
+    on_create_image_descriptions = wrap_operation(
+        "Descripciones de Imagenes",
+        manager.create_image_descriptions,
+        confirm=True,
+        dialog_title="Descripciones de Imagenes",
+        dialog_msg="Se generaran descripciones con IA para todas las imagenes sin descripcion. ¿Continuar?",
+        show_progress=True,
+    )
 
     # ========== BUILD UI ==========
 
@@ -1120,7 +1359,7 @@ def _main(page: ft.Page):
             ft.IconButton(
                 icon=Icons.SETTINGS,
                 icon_color=Colors.WHITE,
-                tooltip="Configuracion",
+                tooltip="Configuración",
                 on_click=open_config_editor,
             ),
         ],
@@ -1129,6 +1368,13 @@ def _main(page: ft.Page):
     # Operations Grid
     operations_grid = ft.ResponsiveRow(
         [
+            create_operation_card(
+                Icons.CLOUD_SYNC,
+                "Carga Completa y Limpieza",
+                "Sincronizacion completa: subir, actualizar y eliminar documentos huerfanos",
+                on_full_upload,
+                Colors.TEAL_500,
+            ),
             create_operation_card(
                 Icons.SYNC,
                 "Actualizar Espacios de Trabajo",
@@ -1149,6 +1395,13 @@ def _main(page: ft.Page):
                 "Previsualizar contenido de carpetas sin subir",
                 on_scan_files,
                 Colors.PURPLE_500,
+            ),
+            create_operation_card(
+                Icons.IMAGE,
+                "Descripciones de Imagenes",
+                "Generar descripciones con IA para imagenes sin descripcion",
+                on_create_image_descriptions,
+                Colors.PINK_500,
             ),
         ],
         spacing=16,
@@ -1274,7 +1527,7 @@ def _main(page: ft.Page):
                             ft.Row(
                                 [
                                     ft.Icon(Icons.SETTINGS, color=Colors.GREY_600, size=18),
-                                    ft.Text("Configuracion", size=14, weight=ft.FontWeight.BOLD, color=Colors.GREY_700),
+                                    ft.Text("Configuración", size=14, weight=ft.FontWeight.BOLD, color=Colors.GREY_700),
                                 ],
                                 spacing=8,
                             ),
