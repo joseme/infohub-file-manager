@@ -73,6 +73,23 @@ class TestConfigManager:
         assert cm.get("app_title") == DEFAULTS["app_title"]
         assert cm.get("app_port") == DEFAULTS["app_port"]
 
+    def test_load_corrupt_json_records_error(self, tmp_path: Path):
+        config_path = tmp_path / "corrupt.json"
+        config_path.write_text("{invalid json here}")
+
+        cm = ConfigManager(config_path)
+
+        assert cm.last_error is not None
+
+    def test_load_valid_json_clears_error(self, tmp_path: Path):
+        config_path = tmp_path / "valid.json"
+        config_path.write_text('{"app_port": 9999}')
+
+        cm = ConfigManager(config_path)
+
+        assert cm.last_error is None
+        assert cm.get("app_port") == 9999
+
     def test_save_write_failure_returns_false(self, tmp_path: Path):
         """When the config file cannot be written, save() should return False."""
         cm = ConfigManager(tmp_path / "valid_config.json")

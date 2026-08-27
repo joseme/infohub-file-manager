@@ -41,6 +41,7 @@ class ConfigManager:
     def __init__(self, config_path=None):
         self.config_path = Path(config_path) if config_path else CONFIG_FILE
         self._config = {}
+        self.last_error = None
         self.load()
 
     def load(self):
@@ -55,6 +56,7 @@ class ConfigManager:
         except Exception as e:
             logger.error(f"Error loading config: {e}")
             self._config = {}
+            self.last_error = str(e)
 
         for key, value in DEFAULTS.items():
             if key not in self._config:

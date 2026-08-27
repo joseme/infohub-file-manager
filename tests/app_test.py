@@ -17,15 +17,58 @@ from app import InfoHubFileManager
 
 @pytest.fixture
 def manager():
-    """Return an InfoHubFileManager with a minimal config dict."""
-    return InfoHubFileManager(config={
-        "anythingllm_api_key": "test-api-key",
-        "anythingllm_base_url": "https://test.infohub.example.com",
-        "ollama_base_url": "http://localhost:11434",
-        "ollama_model": "llava:latest",
-        "image_description_active": True,
-        "watched_folders_root": "/test/watched",
-    })
+    """Return an InfoHubFileManager with a minimal config dict.
+    By default all workspaces are considered accessible (legacy tests).
+    """
+    # Isolate from real env vars so config values win (os.getenv takes precedence)
+    with patch.dict(os.environ, {
+        "ANYTHINGLLM_API_KEY": "",
+        "ANYTHINGLLM_BASE_URL": "",
+        "OLLAMA_BASE_URL": "",
+        "OLLAMA_MODEL": "",
+        "IMAGE_DESCRIPTION_ACTIVATE": "",
+        "WATCHED_FOLDERS_ROOT": "",
+    }):
+        # Block real HTTP calls by default. Tests that need specific responses
+        # patch requests.get/post themselves.
+        with patch("requests.get", return_value=MagicMock(spec=requests.Response)) as mock_get:
+            mock_get.return_value.status_code = 500
+            mgr = InfoHubFileManager(config={
+                "anythingllm_api_key": "test-api-key",
+                "anythingllm_base_url": "https://test.infohub.example.com",
+                "ollama_base_url": "http://localhost:11434",
+                "ollama_model": "llava:latest",
+                "image_description_active": True,
+                "watched_folders_root": "/test/watched",
+            })
+            # Default for existing tests: treat all workspaces as accessible
+            # so scan/sort/full-upload tests keep working without access-control noise.
+            with patch.object(mgr, "is_workspace_accessible", return_value=True):
+                yield mgr
+
+
+@pytest.fixture
+def real_access_manager():
+    """Return an InfoHubFileManager where is_workspace_accessible is real (not patched).
+    Use this for tests that specifically verify access-control behavior.
+    """
+    with patch.dict(os.environ, {
+        "ANYTHINGLLM_API_KEY": "",
+        "ANYTHINGLLM_BASE_URL": "",
+        "OLLAMA_BASE_URL": "",
+        "OLLAMA_MODEL": "",
+        "IMAGE_DESCRIPTION_ACTIVATE": "",
+        "WATCHED_FOLDERS_ROOT": "",
+    }):
+        with patch("requests.get", return_value=MagicMock(spec=requests.Response)):
+            yield InfoHubFileManager(config={
+                "anythingllm_api_key": "test-api-key",
+                "anythingllm_base_url": "https://test.infohub.example.com",
+                "ollama_base_url": "http://localhost:11434",
+                "ollama_model": "llava:latest",
+                "image_description_active": True,
+                "watched_folders_root": "/test/watched",
+            })
 
 
 @pytest.fixture
@@ -188,6 +231,23 @@ class TestScanFiles:
         result = manager.scan_files()
 
         assert "SomeWS" not in result["workspaces"]
+
+    def test_scan_deduplicates_across_parent_dirs(self, manager, watched_dir):
+        """Same workspace name under two matching parents should appear once."""
+        # watched_dir already has Infohub_Tech/WorkspaceA with 3 files
+        # Create a second matching parent with same workspace name
+        (watched_dir / "Infohub_Backup" / "WorkspaceA").mkdir(parents=True)
+        (watched_dir / "Infohub_Backup" / "WorkspaceA" / "extra.txt").write_text("x")
+
+        manager.watched_root = str(watched_dir)
+        result = manager.scan_files()
+
+        # WorkspaceA appears under Infohub_Tech and Infohub_Backup
+        assert "WorkspaceA" in result["workspaces"]
+        # Should appear only ONCE (deduplication)
+        # total_files must NOT double-count WorkspaceA
+        total_from_dict = sum(ws["file_count"] for ws in result["workspaces"].values())
+        assert result["total_files"] == total_from_dict
 
 
 # ---------------------------------------------------------------------------
@@ -352,8 +412,9 @@ class TestCreateWorkspace:
 
 
 class TestUpdateEmbeddings:
-    def test_update_success(self, manager):
-        """Successful update-embeddings call should return True."""
+    def test_update_skips_already_embedded_docs(self, manager):
+        """Docs already registered in workspace must NOT be re-sent as adds
+        (re-adding creates duplicate rows in workspace_documents)."""
         mock_response = MagicMock(spec=requests.Response)
         mock_response.status_code = 200
 
@@ -367,10 +428,30 @@ class TestUpdateEmbeddings:
                 result = manager._update_embeddings("MyWorkspace")
 
         assert result is True
-        mock_post.assert_called_once()
-        # Verify payload
+        mock_post.assert_not_called()
+
+    def test_update_sends_only_new_documents(self, manager):
+        """Only unregistered documents-area docpaths go into adds."""
+        mock_response = MagicMock(spec=requests.Response)
+        mock_response.status_code = 200
+
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "exists": True,
+            "base_names": {"doc1"},
+            "doc_names": {"doc1": "doc1.json"},
+            "raw_docs": [{"docpath": "custom-documents/doc1.json"}],
+        }):
+            with patch.object(
+                manager,
+                "_get_documents_area_docpaths",
+                return_value=["custom-documents/doc1.json", "custom-documents/doc2.json"],
+            ):
+                with patch("requests.post", return_value=mock_response) as mock_post:
+                    result = manager._update_embeddings("MyWorkspace")
+
+        assert result is True
         call_kwargs = mock_post.call_args.kwargs
-        assert call_kwargs["json"]["adds"] == ["custom-documents/doc1.json"]
+        assert call_kwargs["json"]["adds"] == ["custom-documents/doc2.json"]
 
     def test_update_no_docs(self, manager):
         """Workspace with no documents should return True (nothing to embed)."""
@@ -406,21 +487,213 @@ class TestUpdateEmbeddings:
             "doc_names": {"doc1": "doc1.json"},
             "raw_docs": [{"docpath": "custom-documents/doc1.json"}],
         }):
-            with patch("requests.post", return_value=mock_response):
-                result = manager._update_embeddings("MyWorkspace")
+            with patch.object(
+                manager,
+                "_get_documents_area_docpaths",
+                return_value=["custom-documents/doc2.json"],
+            ):
+                with patch("requests.post", return_value=mock_response):
+                    result = manager._update_embeddings("MyWorkspace")
         assert result is False
 
     def test_update_network_error(self, manager):
-        """Network error should return False."""
+        """Network error should return False after retries are exhausted."""
         with patch.object(manager, "get_workspace_documents", return_value={
             "exists": True,
             "base_names": {"doc1"},
             "doc_names": {"doc1": "doc1.json"},
             "raw_docs": [{"docpath": "custom-documents/doc1.json"}],
         }):
-            with patch("requests.post", side_effect=requests.ConnectionError("Timeout")):
-                result = manager._update_embeddings("MyWorkspace")
+            with patch.object(
+                manager,
+                "_get_documents_area_docpaths",
+                return_value=["custom-documents/doc2.json"],
+            ):
+                with patch("requests.post", side_effect=requests.ConnectionError("Timeout")):
+                    with patch("time.sleep"):
+                        result = manager._update_embeddings("MyWorkspace")
         assert result is False
+
+    def test_update_retries_on_504_then_success(self, manager):
+        """504 on first attempt, 200 on retry → True, two POST calls."""
+        mock_504 = MagicMock(spec=requests.Response)
+        mock_504.status_code = 504
+        mock_504.text = "Gateway Time-out"
+        mock_200 = MagicMock(spec=requests.Response)
+        mock_200.status_code = 200
+
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "exists": True,
+            "base_names": {"doc1"},
+            "doc_names": {"doc1": "doc1.json"},
+            "raw_docs": [{"docpath": "custom-documents/doc1.json"}],
+        }):
+            with patch.object(
+                manager,
+                "_get_documents_area_docpaths",
+                return_value=["custom-documents/doc2.json"],
+            ):
+                with patch("requests.post", side_effect=[mock_504, mock_200]) as mock_post:
+                    with patch("time.sleep") as mock_sleep:
+                        result = manager._update_embeddings("MyWorkspace")
+
+        assert result is True
+        assert mock_post.call_count == 2
+        mock_sleep.assert_called_once()
+
+    def test_update_retries_exhausted_on_504(self, manager):
+        """Persistent 504 → False after max retries."""
+        mock_504 = MagicMock(spec=requests.Response)
+        mock_504.status_code = 504
+        mock_504.text = "Gateway Time-out"
+
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "exists": True,
+            "base_names": {"doc1"},
+            "doc_names": {"doc1": "doc1.json"},
+            "raw_docs": [{"docpath": "custom-documents/doc1.json"}],
+        }):
+            with patch.object(
+                manager,
+                "_get_documents_area_docpaths",
+                return_value=["custom-documents/doc2.json"],
+            ):
+                with patch("requests.post", return_value=mock_504) as mock_post:
+                    with patch("time.sleep"):
+                        result = manager._update_embeddings("MyWorkspace")
+
+        assert result is False
+        assert mock_post.call_count == 3
+
+    def test_update_retries_on_network_error(self, manager):
+        """Network error on first attempt, 200 on retry → True."""
+        mock_200 = MagicMock(spec=requests.Response)
+        mock_200.status_code = 200
+
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "exists": True,
+            "base_names": {"doc1"},
+            "doc_names": {"doc1": "doc1.json"},
+            "raw_docs": [{"docpath": "custom-documents/doc1.json"}],
+        }):
+            with patch.object(
+                manager,
+                "_get_documents_area_docpaths",
+                return_value=["custom-documents/doc2.json"],
+            ):
+                with patch("requests.post", side_effect=[requests.ConnectionError("Timeout"), mock_200]) as mock_post:
+                    with patch("time.sleep"):
+                        result = manager._update_embeddings("MyWorkspace")
+
+        assert result is True
+        assert mock_post.call_count == 2
+
+    def test_update_falls_back_to_documents_area_when_listing_empty(self, manager):
+        """InfoHub behavior: uploads land in documents/{slug}/ but are NOT registered
+        in the workspace listing until processed. _update_embeddings must find the
+        docpaths in the documents area and embed them anyway."""
+        mock_docs_response = MagicMock(spec=requests.Response)
+        mock_docs_response.status_code = 200
+        mock_docs_response.json.return_value = {
+            "localFiles": {
+                "name": "documents",
+                "type": "folder",
+                "items": [
+                    {"name": "custom-documents", "type": "folder", "items": []},
+                    {"name": "blawd", "type": "folder", "items": [
+                        {"name": "Blawd-Profile-2026-(2).pdf-402c5c3a-68ec-4a88-a81d-b268285c722b.json", "type": "file"},
+                        {"name": "Menu.png-d3c13eca-021c-4af4-8ec0-06ccb7552abb.json", "type": "file"},
+                    ]},
+                ],
+            }
+        }
+
+        mock_embed_response = MagicMock(spec=requests.Response)
+        mock_embed_response.status_code = 200
+
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "exists": True,
+            "base_names": set(),
+            "doc_names": {},
+            "raw_docs": [],
+        }):
+            with patch("requests.get", return_value=mock_docs_response) as mock_get:
+                with patch("requests.post", return_value=mock_embed_response) as mock_post:
+                    result = manager._update_embeddings("blawd")
+
+        assert result is True
+        # Documents area queried for the workspace slug
+        mock_get.assert_called_once_with(
+            "https://test.infohub.example.com/api/v1/documents",
+            headers={
+                "Authorization": "Bearer test-api-key",
+                "accept": "application/json",
+            },
+            timeout=10,
+        )
+        # Embeddings triggered with the documents-area docpaths
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs["json"]["adds"] == [
+            "blawd/Blawd-Profile-2026-(2).pdf-402c5c3a-68ec-4a88-a81d-b268285c722b.json",
+            "blawd/Menu.png-d3c13eca-021c-4af4-8ec0-06ccb7552abb.json",
+        ]
+
+    def test_update_no_docs_anywhere_returns_true(self, manager):
+        """Workspace listing empty AND documents area has no matching folder:
+        nothing to embed, return True."""
+        mock_docs_response = MagicMock(spec=requests.Response)
+        mock_docs_response.status_code = 200
+        mock_docs_response.json.return_value = {
+            "localFiles": {"name": "documents", "type": "folder", "items": []}
+        }
+
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "exists": True,
+            "base_names": set(),
+            "doc_names": {},
+            "raw_docs": [],
+        }):
+            with patch("requests.get", return_value=mock_docs_response):
+                with patch("requests.post") as mock_post:
+                    result = manager._update_embeddings("EmptyWS")
+
+        assert result is True
+        mock_post.assert_not_called()
+
+    def test_update_merges_partial_listing_with_documents_area(self, manager):
+        """Partial workspace listing: doc1 registered, doc2 only in the
+        documents area. Only the unregistered one goes into adds."""
+        mock_docs_response = MagicMock(spec=requests.Response)
+        mock_docs_response.status_code = 200
+        mock_docs_response.json.return_value = {
+            "localFiles": {
+                "name": "documents",
+                "type": "folder",
+                "items": [
+                    {"name": "blawd", "type": "folder", "items": [
+                        {"name": "doc1.json", "type": "file"},
+                        {"name": "doc2.json", "type": "file"},
+                    ]},
+                ],
+            }
+        }
+
+        mock_embed_response = MagicMock(spec=requests.Response)
+        mock_embed_response.status_code = 200
+
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "exists": True,
+            "base_names": {"doc1"},
+            "doc_names": {"doc1": "doc1.json"},
+            "raw_docs": [{"docpath": "blawd/doc1.json"}],
+        }):
+            with patch("requests.get", return_value=mock_docs_response):
+                with patch("requests.post", return_value=mock_embed_response) as mock_post:
+                    result = manager._update_embeddings("blawd")
+
+        assert result is True
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs["json"]["adds"] == ["blawd/doc2.json"]
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +730,73 @@ class TestFileExistsInWorkspace:
             assert manager.file_exists_in_workspace(Path("/some/path/doc1.pdf"), "WS") is True
             assert manager.file_exists_in_workspace(Path("/some/path/doc2.txt"), "WS") is True
             assert manager.file_exists_in_workspace(Path("/some/path/doc3.pdf"), "WS") is False
+
+    def test_file_exists_in_documents_area_only(self, manager):
+        """Empty listing but docpath exists in documents area (slug/stem-uuid.json)."""
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True,
+        }):
+            with patch.object(
+                manager,
+                "_get_documents_area_docpaths",
+                return_value=["ws/doc1-abc123.json", "ws/doc2-xyz789.json"],
+            ):
+                assert manager.file_exists_in_workspace(Path("/some/path/doc1.pdf"), "WS") is True
+                assert manager.file_exists_in_workspace(Path("/some/path/nope.pdf"), "WS") is False
+
+    def test_file_exists_with_hyphen_separator(self, manager):
+        """Listing base_names with hyphen separator (report-uuid)."""
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "base_names": {"report-402c5c3a"},
+            "doc_names": {"report-402c5c3a": "report-402c5c3a.json"},
+            "raw_docs": [],
+        }):
+            assert manager.file_exists_in_workspace(Path("/some/path/report.pdf"), "WS") is True
+
+    def test_file_exists_slugified_name_with_spaces(self, manager):
+        """Real server format: 'Daniel Reis ... Essentials.pdf' is stored as
+        'Daniel-Reis-...-Essentials.pdf-<uuid>.json' (spaces → dashes).
+        Prefix match must survive the slugification."""
+        base = "Daniel-Reis-Odoo-Development-Essentials.pdf-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c"
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "base_names": {base},
+            "doc_names": {base: f"{base}.json"},
+            "raw_docs": [],
+        }):
+            assert manager.file_exists_in_workspace(
+                Path("/docs/Daniel Reis Odoo Development Essentials.pdf"), "odoo"
+            ) is True
+
+    def test_file_exists_slugified_name_with_commas_and_underscores(self, manager):
+        base = "Odoo-11-Development-Cookbook_-Over-120-unique-recipes-bc196923-7918-4854-9368-1f389c2bf9c6"
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "base_names": {base},
+            "doc_names": {base: f"{base}.json"},
+            "raw_docs": [],
+        }):
+            assert manager.file_exists_in_workspace(
+                Path("/docs/Odoo 11 Development Cookbook_ Over 120 unique recipes.epub"), "odoo"
+            ) is True
+
+    def test_file_exists_slugified_name_with_accents(self, manager):
+        base = "informe-ano-2024.pdf-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c"
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "base_names": {base},
+            "doc_names": {base: f"{base}.json"},
+            "raw_docs": [],
+        }):
+            assert manager.file_exists_in_workspace(Path("/docs/informe año 2024.pdf"), "ws") is True
+
+    def test_different_file_not_matched_as_slugified_duplicate(self, manager):
+        base = "Daniel-Reis-Odoo-Development-Essentials.pdf-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c"
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "base_names": {base},
+            "doc_names": {base: f"{base}.json"},
+            "raw_docs": [],
+        }):
+            assert manager.file_exists_in_workspace(
+                Path("/docs/Greg Moss Working with Odoo.pdf"), "odoo"
+            ) is False
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +890,7 @@ class TestUploadFileToWorkspace:
         call_args = mock_post.call_args
         assert call_args[0][0] == "https://test.infohub.example.com/api/v1/document/upload/myworkspace"
         assert "file" in call_args.kwargs["files"]
+        assert call_args.kwargs["timeout"] == 300
 
     def test_upload_skipped_when_exists(self, manager, tmp_path):
         """When file already exists, should skip without API call."""
@@ -576,6 +917,48 @@ class TestUploadFileToWorkspace:
         mock_docs = {
             "base_names": {"existing.abc123", "other.doc"},
             "doc_names": {"existing.abc123": "existing.abc123.json", "other.doc": "other.doc.json"},
+            "raw_docs": [],
+            "exists": True,
+        }
+
+        with patch.object(manager, "get_workspace_documents", return_value=mock_docs):
+            with patch("requests.post") as mock_post:
+                success, skipped, msg = manager.upload_file_to_workspace(file_path, "WS")
+
+        assert success is False
+        assert skipped is True
+        assert msg == "already exists"
+        mock_post.assert_not_called()
+
+    def test_upload_skipped_when_in_documents_area_only(self, manager, tmp_path):
+        """Empty listing but file already in documents area → skip, no upload call."""
+        file_path = tmp_path / "Blawd-Profile-2026-(2).pdf"
+        file_path.write_text("content")
+
+        mock_docs = {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
+
+        with patch.object(manager, "get_workspace_documents", return_value=mock_docs):
+            with patch.object(
+                manager,
+                "_get_documents_area_docpaths",
+                return_value=["blawd/Blawd-Profile-2026-(2).pdf-402c5c3a-9f1c.json"],
+            ):
+                with patch("requests.post") as mock_post:
+                    success, skipped, msg = manager.upload_file_to_workspace(file_path, "blawd")
+
+        assert success is False
+        assert skipped is True
+        assert msg == "already exists"
+        mock_post.assert_not_called()
+
+    def test_upload_skipped_with_hyphen_separator(self, manager, tmp_path):
+        """base_names with hyphen separator (existing-abc123) → skip."""
+        file_path = tmp_path / "existing.pdf"
+        file_path.write_text("content")
+
+        mock_docs = {
+            "base_names": {"existing-abc123"},
+            "doc_names": {"existing-abc123": "existing-abc123.json"},
             "raw_docs": [],
             "exists": True,
         }
@@ -665,7 +1048,10 @@ class TestSortFiles:
             with patch.object(manager, "_generate_image_description", return_value="desc"):
                 with patch.object(manager, "_update_embeddings", return_value=True):
                     with patch.object(manager, "image_description_active", True):
-                        result = manager.sort_files()
+                        with patch.object(manager, "get_workspace_documents", return_value={
+                            "base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True
+                        }):
+                            result = manager.sort_files()
 
         assert result["status"] == "success"
         assert result["uploaded"] == 5
@@ -683,7 +1069,10 @@ class TestSortFiles:
             with patch.object(manager, "_generate_image_description", return_value=desc_text):
                 with patch.object(manager, "_update_embeddings", return_value=True):
                     with patch.object(manager, "image_description_active", True):
-                        result = manager.sort_files()
+                        with patch.object(manager, "get_workspace_documents", return_value={
+                            "base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True
+                        }):
+                            result = manager.sort_files()
 
         ws_a = watched_dir / "Infohub_Tech" / "WorkspaceA"
         desc_file = ws_a / "image1.jpg.image_description.txt"
@@ -700,7 +1089,10 @@ class TestSortFiles:
             with patch.object(manager, "_generate_image_description") as mock_gen:
                 with patch.object(manager, "_update_embeddings", return_value=True):
                     with patch.object(manager, "image_description_active", True):
-                        result = manager.sort_files()
+                        with patch.object(manager, "get_workspace_documents", return_value={
+                            "base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True
+                        }):
+                            result = manager.sort_files()
 
         mock_gen.assert_not_called()
 
@@ -709,6 +1101,42 @@ class TestSortFiles:
         manager.watched_root = "/nonexistent"
         result = manager.sort_files()
         assert result["status"] == "error"
+
+    def test_sort_creates_workspace_for_empty_folder(self, manager, watched_dir):
+        """An empty local workspace folder should still create the remote workspace."""
+        (watched_dir / "Infohub_Tech" / "EmptyWS").mkdir()
+        manager.watched_root = str(watched_dir)
+
+        def mock_get_docs(ws_name):
+            if ws_name == "EmptyWS":
+                return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": False}
+            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
+
+        with patch.object(manager, "get_workspace_documents", side_effect=mock_get_docs):
+            with patch.object(manager, "create_workspace", return_value=True) as mock_create:
+                with patch.object(manager, "upload_file_to_workspace", return_value=(True, False, "uploaded")):
+                    with patch.object(manager, "_update_embeddings", return_value=True):
+                        with patch.object(manager, "image_description_active", False):
+                            result = manager.sort_files()
+
+        assert result["status"] == "success"
+        mock_create.assert_called_once_with("EmptyWS")
+
+    def test_sort_does_not_recreate_existing_workspace(self, manager, watched_dir):
+        """Workspaces that already exist remotely should not be recreated."""
+        manager.watched_root = str(watched_dir)
+
+        with patch.object(manager, "get_workspace_documents", return_value={
+            "base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True
+        }):
+            with patch.object(manager, "create_workspace") as mock_create:
+                with patch.object(manager, "upload_file_to_workspace", return_value=(True, False, "uploaded")):
+                    with patch.object(manager, "_update_embeddings", return_value=True):
+                        with patch.object(manager, "image_description_active", False):
+                            result = manager.sort_files()
+
+        assert result["status"] == "success"
+        mock_create.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -735,8 +1163,9 @@ class TestFullUploadAndClean:
                     "base_names": {"doc1", "doc_orphan"},
                     "doc_names": {"doc1": "doc1.uuid.json", "doc_orphan": "doc_orphan.abc.json"},
                     "raw_docs": [],
+                    "exists": True,
                 }
-            return {"base_names": set(), "doc_names": {}, "raw_docs": []}
+            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
 
         delete_results = {}
 
@@ -767,8 +1196,9 @@ class TestFullUploadAndClean:
                     "base_names": {"doc1", "doc2"},
                     "doc_names": {"doc1": "doc1.uuid.json", "doc2": "doc2.uuid.json"},
                     "raw_docs": [],
+                    "exists": True,
                 }
-            return {"base_names": set(), "doc_names": {}, "raw_docs": []}
+            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
 
         with patch.object(manager, "get_workspace_documents", side_effect=mock_get_docs):
             with patch.object(manager, "delete_documents") as mock_delete:
@@ -779,6 +1209,25 @@ class TestFullUploadAndClean:
         # doc1 and doc2 exist locally, so no orphans - delete_documents not called at all
         mock_delete.assert_not_called()
         assert result["deleted"] == 0
+
+    def test_full_upload_creates_workspace_for_empty_folder(self, manager, watched_dir):
+        """An empty local workspace folder should still create the remote workspace."""
+        (watched_dir / "Infohub_Tech" / "EmptyWS").mkdir()
+        manager.watched_root = str(watched_dir)
+
+        def mock_get_docs(ws_name):
+            if ws_name == "EmptyWS":
+                return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": False}
+            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
+
+        with patch.object(manager, "get_workspace_documents", side_effect=mock_get_docs):
+            with patch.object(manager, "create_workspace", return_value=True) as mock_create:
+                with patch.object(manager, "upload_file_to_workspace", return_value=(True, False, "uploaded")):
+                    with patch.object(manager, "_update_embeddings", return_value=True):
+                        result = manager.full_upload_and_clean()
+
+        assert result["status"] == "success"
+        mock_create.assert_called_once_with("EmptyWS")
 
 
 # ---------------------------------------------------------------------------
@@ -908,3 +1357,155 @@ class TestGenerateImageDescription:
         with patch("requests.post", side_effect=requests.ConnectionError("Timeout")):
             with pytest.raises(requests.ConnectionError):
                 manager._generate_image_description(img_path)
+
+
+# ---------------------------------------------------------------------------
+# is_workspace_accessible / get_accessible_workspace_names
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspaceAccess:
+    def test_accessible_when_api_returns_workspace(self, real_access_manager):
+        mock_response = MagicMock(spec=requests.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "workspace": [{"slug": "my-ws", "name": "My WS"}]
+        }
+
+        with patch("requests.get", return_value=mock_response):
+            assert real_access_manager.is_workspace_accessible("My WS") is True
+
+    def test_not_accessible_when_404(self, real_access_manager):
+        mock_response = MagicMock(spec=requests.Response)
+        mock_response.status_code = 404
+
+        with patch("requests.get", return_value=mock_response):
+            assert real_access_manager.is_workspace_accessible("NoAccess") is False
+
+    def test_not_accessible_on_network_error(self, real_access_manager):
+        with patch("requests.get", side_effect=requests.ConnectionError("offline")):
+            assert real_access_manager.is_workspace_accessible("AnyWS") is False
+
+    def test_get_accessible_filters_unaccessible(self, real_access_manager):
+        # Only "OK" is accessible; "Nope" returns 404
+        ok_response = MagicMock(spec=requests.Response)
+        ok_response.status_code = 200
+        ok_response.json.return_value = {"workspace": [{"slug": "ok", "name": "OK"}]}
+
+        nope_response = MagicMock(spec=requests.Response)
+        nope_response.status_code = 404
+
+        with patch("requests.get", side_effect=[nope_response, ok_response]):
+            result = real_access_manager.get_accessible_workspace_names(["Nope", "OK"])
+
+        assert result == {"OK"}
+
+    def test_get_accessible_empty_when_none_accessible(self, real_access_manager):
+        with patch.object(real_access_manager, "is_workspace_accessible", return_value=False):
+            result = real_access_manager.get_accessible_workspace_names(["A", "B", "C"])
+
+        assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# login / allowed workspaces por usuario
+# ---------------------------------------------------------------------------
+
+
+class TestUserWorkspaceFilter:
+    def test_no_login_means_no_user_filter(self, manager):
+        manager.allowed_workspaces = None
+        result = manager.get_accessible_workspace_names(["WorkspaceA", "TeamSpace"])
+        assert result == {"WorkspaceA", "TeamSpace"}
+
+    def test_filters_by_allowed_slugs(self, manager):
+        manager.allowed_workspaces = {"workspacea": "WorkspaceA"}
+        result = manager.get_accessible_workspace_names(["WorkspaceA", "TeamSpace"])
+        assert result == {"WorkspaceA"}
+
+    def test_slug_mapping_applies_before_filter(self, manager):
+        manager.allowed_workspaces = {"team-space": "Team Space"}
+        result = manager.get_accessible_workspace_names(["Team_Space"])
+        assert result == {"Team_Space"}
+
+    def test_empty_api_key_skips_v1_check_but_keeps_user_filter(self, manager):
+        """Sin API key el chequeo /v1 no puede aportar; manda el filtro de usuario."""
+        manager.api_key = ""
+        manager.allowed_workspaces = {"workspacea": "WorkspaceA"}
+        with patch("requests.get", side_effect=AssertionError("no debe llamar /v1")):
+            result = manager.get_accessible_workspace_names(["WorkspaceA", "TeamSpace"])
+        assert result == {"WorkspaceA"}
+
+
+class TestLogin:
+    def _mock_response(self, status_code=200, payload=None):
+        response = MagicMock(spec=requests.Response)
+        response.status_code = status_code
+        response.json.return_value = payload or {}
+        return response
+
+    def test_login_success_stores_token_and_workspaces(self, manager):
+        post_response = self._mock_response(payload={
+            "valid": True,
+            "token": "jwt-token",
+            "user": {"id": 1, "username": "jose", "role": "default"},
+        })
+        get_response = self._mock_response(payload={
+            "workspaces": [{"slug": "workspacea", "name": "WorkspaceA"}],
+        })
+
+        with patch("requests.post", return_value=post_response), \
+             patch("requests.get", return_value=get_response) as mock_get:
+            ok, err = manager.login("jose", "secret")
+
+        assert (ok, err) == (True, None)
+        assert manager.session_token == "jwt-token"
+        assert manager.allowed_workspaces == {"workspacea": "WorkspaceA"}
+        assert mock_get.call_args.kwargs["headers"]["Authorization"] == "Bearer jwt-token"
+
+    def test_login_success_falls_back_to_slug_when_name_missing(self, manager):
+        post_response = self._mock_response(payload={"valid": True, "token": "jwt"})
+        get_response = self._mock_response(payload={
+            "workspaces": [{"slug": "solo-slug"}, {}],
+        })
+
+        with patch("requests.post", return_value=post_response), \
+             patch("requests.get", return_value=get_response):
+            ok, _ = manager.login("jose", "secret")
+
+        assert manager.allowed_workspaces == {"solo-slug": "solo-slug"}
+
+    def test_login_invalid_credentials(self, manager):
+        post_response = self._mock_response(payload={
+            "valid": False,
+            "message": "[001] Invalid login credentials.",
+        })
+
+        with patch("requests.post", return_value=post_response):
+            ok, err = manager.login("jose", "wrong")
+
+        assert ok is False
+        assert "[001]" in err
+        assert manager.session_token == ""
+        assert manager.allowed_workspaces is None
+
+    def test_login_fails_closed_when_workspaces_unavailable(self, manager):
+        post_response = self._mock_response(payload={"valid": True, "token": "jwt"})
+        get_response = self._mock_response(status_code=500)
+
+        with patch("requests.post", return_value=post_response), \
+             patch("requests.get", return_value=get_response):
+            ok, err = manager.login("jose", "secret")
+
+        assert ok is False
+        assert "workspaces" in err
+        assert manager.session_token == ""
+        assert manager.allowed_workspaces is None
+
+    def test_login_connection_error(self, manager):
+        with patch("requests.post", side_effect=requests.ConnectionError("offline")):
+            ok, err = manager.login("jose", "secret")
+
+        assert ok is False
+        assert err is not None
+        assert manager.session_token == ""
