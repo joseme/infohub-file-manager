@@ -10,3 +10,15 @@ dist/
 build/
 .idea/
 .vscode/
+*.bak
+
+# local tool/session state
+.omo/
+.codebase/
+.playwright-mcp/
+
+# has a live API key (deploy/config.blank.json is the committed template)
+config.json
+
+# stray local backup, not the tracked app.py
+app (copia 1).py
