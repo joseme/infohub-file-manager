@@ -3,10 +3,10 @@
   "app_port": 8500,
   "log_level": "INFO",
   "log_file": "infohub.log",
-  "anythingllm_api_key": "NZ22C9M-X93MGDH-GXCRM6D-KT87TFT",
+  "anythingllm_api_key": "Tu Clave",
   "anythingllm_base_url": "http://localhost:3001",
   "ollama_base_url": "http://localhost:11434",
-  "ollama_model": "gemma3:1b",
+  "ollama_model": "tu modelo",
   "image_description_active": true,
   "watched_folders_root": "/home/jose/Documentos/"
 }
