@@ -1,0 +1,26 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.git/
+.gitignore
+.env
+.env.*
+config.json
+"app (copia 1).py"
+dist/
+build/
+.idea/
+.vscode/
+.codebase/
+.codegraph
+.omo/
+.opencode/
+.planning/
+.playwright-mcp/
+.pytest_cache/
+tests/
+infohub.log
+README.md
+USER_GUIDE_ES.md
