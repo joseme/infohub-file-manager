@@ -50,15 +50,18 @@ pip install -r requirements.txt
 
 ## ⚙️ Configuración
 
-Copia el archivo de ejemplo y edítalo con tus datos:
+La app se configura de dos formas, en este orden de prioridad:
+
+1. **`config.json`** (recomendado): se crea automáticamente en el primer arranque con los valores por defecto, y se edita desde el propio panel web (**⚙️ Configuración**) sin tocar archivos a mano.
+2. **Variables de entorno / `.env`** (opcional, para overrides de despliegue): si una variable de entorno está definida, tiene prioridad sobre el valor equivalente de `config.json`. Copia `.env.example` a `.env` solo si necesitas este modo:
 
 ```bash
 cp .env.example .env
 ```
 
-> **Nota:** El archivo `.env` está incluido en `.gitignore` para evitar subir secretos accidentalmente.
+> **Nota:** `.env` y `config.json` están incluidos en `.gitignore` — ninguno de los dos se sube al repositorio, porque ambos pueden contener tu API key.
 
-### Variables de entorno necesarias
+### Variables de entorno disponibles
 
 ```ini
 # AnythingLLM API Configuration
@@ -88,7 +91,7 @@ LOG_FILE=infohub.log
 
 1. Accede a tu instancia de AnythingLLM.
 2. Ve a **Settings → Tools → Developer API**.
-3. Copia la clave y pégala en `ANYTHINGLLM_API_KEY`.
+3. Pégala en el panel **⚙️ Configuración** de la app (o en `ANYTHINGLLM_API_KEY` si usas `.env`).
 
 ---
 
@@ -127,7 +130,7 @@ python app.py
 3. Abre tu navegador en:
 
 ```
-http://localhost:8000
+http://localhost:8500
 ```
 
 ### Operaciones disponibles
@@ -176,6 +179,37 @@ curl http://localhost:11434/api/tags
 - Confirma que Ollama está ejecutándose: `ollama serve` o `ollama list`.
 - Verifica que el modelo esté descargado: `ollama pull bkudler/llava-phi3`.
 - Revisa que `OLLAMA_BASE_URL` apunte a tu instancia local (`http://localhost:11434`).
+
+---
+
+## 📦 Distribución
+
+Además de correr desde código fuente (`python app.py`), hay dos formas de distribuir la app:
+
+### Ejecutable standalone (PyInstaller)
+
+```bash
+./build_linux.sh      # genera dist/infohub-file-manager
+build_windows.bat      # genera dist\infohub-file-manager.exe
+```
+
+El ejecutable lee `config.json` desde su propio directorio (no desde una carpeta temporal), así que puede moverse junto al binario a cualquier máquina.
+
+### Docker
+
+```bash
+docker compose up -d --build
+```
+
+Publica el panel en `http://localhost:8500`, montando `config.json`, `infohub.log` y `./data` como volúmenes persistentes. Ver `Dockerfile` / `docker-compose.yml`.
+
+### Despliegue remoto
+
+`deploy/deploy.sh` sincroniza el proyecto a un servidor remoto por `rsync` (excluyendo `venv/`, `config.json` y otros archivos locales) y levanta el contenedor con `docker compose`. Usa `deploy/config.blank.json` como plantilla si el servidor no tiene `config.json` todavía:
+
+```bash
+./deploy/deploy.sh
+```
 
 ---
 
