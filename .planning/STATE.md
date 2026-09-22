@@ -2,8 +2,8 @@ phase: 3
 status: complete
 plan_confirmed: true
 task_type: "build"
-last_action: "PyInstaller build tooling created (build.spec, build_linux.sh, build_windows.bat)"
-next_action: "run /fd-done to close phase"
+last_action: "README brought back in sync with config.json/Docker/PyInstaller reality; added missing .env.example"
+next_action: "none — phase closed"
 requires_design_first: false
 design_stage: "pending"
 design_approved: false
@@ -14,6 +14,7 @@ blockers:
 - none
 
 ## Session History
+- 2026-09-22T00:00:00.000Z — Repo saneado: build/deploy tooling, .planning y config.json (con API key) resueltos vía git; README corregido (puerto 8000→8500, config.json como fuente primaria, .env.example creado — no existía pese a estar referenciado); 105/105 tests pass. Fase 3 cerrada.
 - 2026-08-18T19:38:25.768Z — PyInstaller build tooling created (build.spec, build_linux.sh, build_windows.bat)
 - 2026-08-18T19:14:07.389Z — New task: PyInstaller build scripts for Windows + Linux
 - 2026-08-18T14:52:42.213Z — Inconsistency fix applied — all 4 methods now use first-wins dedup
