@@ -12,6 +12,7 @@ import time
 import requests
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 
 import flet as ft
 from flet import Icons, Colors
@@ -32,10 +33,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Public URL of the InfoHub ecosystem portal ("Inicio" button). Empty hides it.
+PORTAL_URL = os.getenv("PORTAL_URL", "").strip()
+
 # Retry policy for update-embeddings (openresty proxy returns 502/503/504 under load)
 EMBEDDINGS_MAX_RETRIES = 3
 EMBEDDINGS_RETRY_STATUS_CODES = {502, 503, 504}
 EMBEDDINGS_RETRY_BACKOFF_SECONDS = 5
+
+
+def _query_param(page: ft.Page, key: str) -> str:
+    """Lee un parámetro de la query string de la página web ('' si no está)."""
+    try:
+        value = page.query.to_dict.get(key)
+        if value:
+            return str(value)
+    except Exception:
+        pass
+    for raw in (page.route, page.url):
+        try:
+            values = parse_qs(urlparse(raw or "").query).get(key)
+            if values:
+                return values[0]
+        except Exception:
+            pass
+    return ""
 
 
 class InfoHubFileManager:
@@ -96,6 +118,34 @@ class InfoHubFileManager:
         except Exception as e:
             logger.error(f"Login error: {e}")
             return False, f"Error de conexion con InfoHub: {e}"
+
+    def login_with_ticket(self, ticket: str) -> tuple[bool, str | None, str | None]:
+        """SSO desde el portal de InfoHub: canjea un ticket de un solo uso.
+
+        Devuelve (ok, mensaje_error, username).
+        """
+        base = self.base_url.rstrip("/")
+        try:
+            resp = requests.post(
+                f"{base}/api/system/app-ticket/redeem",
+                json={"ticket": ticket},
+                headers={"accept": "application/json"},
+                timeout=10,
+            )
+            data = resp.json()
+            if resp.status_code != 200 or not data.get("valid") or not data.get("token"):
+                return False, data.get("message") or "Ticket inválido o vencido", None
+
+            self.session_token = data["token"]
+            allowed = self._fetch_allowed_workspaces()
+            if allowed is None:
+                self.session_token = ""
+                return False, "No se pudieron obtener los workspaces del usuario", None
+            self.allowed_workspaces = allowed
+            return True, None, (data.get("user") or {}).get("username")
+        except Exception as e:
+            logger.error(f"Ticket login error: {e}")
+            return False, f"Error de conexion con InfoHub: {e}", None
 
     def _fetch_allowed_workspaces(self) -> dict[str, str] | None:
         """{slug: nombre} visibles para el usuario logueado (server filtra por membresía)."""
@@ -982,9 +1032,9 @@ def _main(page: ft.Page):
         ),
         actions=[
             ft.TextButton(
-                "Salir",
-                icon=Icons.CLOSE,
-                on_click=lambda e: page.window.close(),
+                "Volver al inicio" if PORTAL_URL else "Salir",
+                icon=Icons.HOME if PORTAL_URL else Icons.CLOSE,
+                on_click=lambda e: go_to_portal() if PORTAL_URL else page.window.close(),
             ),
             ft.FilledButton(
                 "Ingresar",
@@ -1062,6 +1112,36 @@ def _main(page: ft.Page):
         except Exception:
             return False
 
+    def _after_login(username: str, base_url: str):
+        show_snackbar(f"Sesión iniciada como {username}", Colors.GREEN_700)
+        add_log(
+            f"Login exitoso (usuario: {username}) - Workspaces habilitados: {len(manager.allowed_workspaces or {})}",
+            "success",
+        )
+        if not manager.api_key or not _validate_credentials(base_url, manager.api_key):
+            show_snackbar("API Key InfoHub ausente o inválida en config.json: la sincronización fallará hasta configurarla", Colors.RED_600)
+            add_log("Advertencia: API Key InfoHub ausente o inválida. Configúrala en Ajustes para poder sincronizar.", "warning")
+        _show_user_workspaces()
+
+    def _handle_ticket_login(ticket: str):
+        """SSO desde el portal: sin ticket válido se cae al diálogo de login."""
+        def _do():
+            ok, msg, username = manager.login_with_ticket(ticket)
+            page.run_task(page.push_route, "/")  # quita el ticket de la URL (seguro desde un hilo)
+            if ok:
+                _after_login(username or "usuario", manager.base_url)
+            else:
+                add_log(f"Inicio de sesión desde el portal falló: {msg}", "warning")
+                login_error.value = "No se pudo iniciar sesión desde el portal (enlace vencido o usado). Ingresá tus credenciales."
+                page.show_dialog(login_dialog)
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def go_to_portal():
+        page.run_task(
+            ft.UrlLauncher().launch_url, PORTAL_URL, web_only_window_name="_self"
+        )
+
     def _handle_login():
         base_url = login_base_url.value.strip()
         username = login_username.value.strip()
@@ -1090,15 +1170,7 @@ def _main(page: ft.Page):
                 login_error.value = ""
                 login_progress.visible = False
                 page.pop_dialog()
-                show_snackbar(f"Sesión iniciada como {username}", Colors.GREEN_700)
-                add_log(
-                    f"Login exitoso (usuario: {username}) - Workspaces habilitados: {len(manager.allowed_workspaces or {})}",
-                    "success",
-                )
-                if not manager.api_key or not _validate_credentials(base_url, manager.api_key):
-                    show_snackbar("API Key InfoHub ausente o inválida en config.json: la sincronización fallará hasta configurarla", Colors.RED_600)
-                    add_log("Advertencia: API Key InfoHub ausente o inválida. Configúrala en Ajustes para poder sincronizar.", "warning")
-                _show_user_workspaces()
+                _after_login(username, base_url)
             except Exception as ex:
                 login_error.value = f"Error: {ex}"
                 login_progress.visible = False
@@ -1106,7 +1178,9 @@ def _main(page: ft.Page):
 
         threading.Thread(target=_do_login, daemon=True).start()
 
-    page.show_dialog(login_dialog)
+    sso_ticket = _query_param(page, "ticket")
+    if not sso_ticket:
+        page.show_dialog(login_dialog)
 
     # ========== STATE ==========
     is_processing = False
@@ -1776,6 +1850,18 @@ def _main(page: ft.Page):
         center_title=False,
         bgcolor=Colors.INDIGO_700,
         actions=[
+            *(
+                [
+                    ft.IconButton(
+                        icon=Icons.HOME,
+                        icon_color=Colors.WHITE,
+                        tooltip="Volver al inicio de InfoHub",
+                        on_click=lambda e: go_to_portal(),
+                    )
+                ]
+                if PORTAL_URL
+                else []
+            ),
             ft.IconButton(
                 icon=Icons.REFRESH,
                 icon_color=Colors.WHITE,
@@ -1948,6 +2034,9 @@ def _main(page: ft.Page):
     # Initial log
     add_log("Sistema iniciado correctamente", "success")
     add_log(f"Conectado a: {manager.base_url}", "info")
+
+    if sso_ticket:
+        _handle_ticket_login(sso_ticket)
 
 
 if __name__ == "__main__":

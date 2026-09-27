@@ -9,6 +9,9 @@ services:
         ARG_GID: ${GID:-1000}
     ports:
       - "8500:8500"
+    environment:
+      # Public URL of the InfoHub portal ("Inicio" button). Empty hides it.
+      PORTAL_URL: ${PORTAL_URL:-}
     volumes:
       - "./config.json:/app/config.json"
       - "./infohub.log:/app/infohub.log"

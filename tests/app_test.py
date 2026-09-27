@@ -1509,3 +1509,45 @@ class TestLogin:
         assert ok is False
         assert err is not None
         assert manager.session_token == ""
+
+
+# ============================================================
+# login_with_ticket (SSO desde el portal de InfoHub)
+# ============================================================
+class TestLoginWithTicket:
+    def _resp(self, status, payload):
+        r = MagicMock(spec=requests.Response)
+        r.status_code = status
+        r.json.return_value = payload
+        return r
+
+    def test_valid_ticket_sets_token_and_workspaces(self, manager):
+        redeem = self._resp(200, {"valid": True, "token": "jwt-1", "user": {"username": "ana"}})
+        workspaces = self._resp(200, {"workspaces": [{"slug": "ws1", "name": "WS 1"}]})
+        with patch("requests.post", return_value=redeem) as mock_post, patch(
+            "requests.get", return_value=workspaces
+        ):
+            ok, msg, username = manager.login_with_ticket("allm-tat-XYZ")
+
+        assert ok is True and msg is None and username == "ana"
+        assert manager.session_token == "jwt-1"
+        assert manager.allowed_workspaces == {"ws1": "WS 1"}
+        url = mock_post.call_args[0][0]
+        assert url.endswith("/api/system/app-ticket/redeem")
+        assert mock_post.call_args[1]["json"] == {"ticket": "allm-tat-XYZ"}
+
+    def test_invalid_ticket_fails(self, manager):
+        redeem = self._resp(401, {"valid": False, "message": "Invalid app ticket: Token expired."})
+        with patch("requests.post", return_value=redeem):
+            ok, msg, username = manager.login_with_ticket("allm-tat-OLD")
+        assert ok is False and "expired" in msg and username is None
+        assert manager.session_token == ""
+
+    def test_workspace_fetch_failure_is_fail_closed(self, manager):
+        redeem = self._resp(200, {"valid": True, "token": "jwt-1", "user": {"username": "ana"}})
+        with patch("requests.post", return_value=redeem), patch(
+            "requests.get", return_value=self._resp(500, {})
+        ):
+            ok, _, _ = manager.login_with_ticket("allm-tat-XYZ")
+        assert ok is False
+        assert manager.session_token == ""
