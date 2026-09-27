@@ -97,6 +97,11 @@ class InfoHubFileManager:
             logger.error(f"Login error: {e}")
             return False, f"Error de conexion con InfoHub: {e}"
 
+    def clear_session(self):
+        """Cierra la sesión del usuario: sin sesión la UI no permite operar."""
+        self.session_token = ""
+        self.allowed_workspaces = None
+
     def _fetch_allowed_workspaces(self) -> dict[str, str] | None:
         """{slug: nombre} visibles para el usuario logueado (server filtra por membresía)."""
         try:
@@ -171,8 +176,24 @@ class InfoHubFileManager:
         }
 
     def get_workspace_slug(self, workspace_name: str) -> str:
-        """Convert workspace name to slug format"""
+        """Convert workspace name to slug format.
+
+        Si el nombre coincide con un workspace habilitado del usuario se usa su
+        slug real (el server slugifica acentos/puntuación distinto que aquí).
+        """
+        if self.allowed_workspaces:
+            wanted = workspace_name.casefold()
+            for slug, name in self.allowed_workspaces.items():
+                if (name or "").casefold() == wanted:
+                    return slug
         return workspace_name.lower().replace(" ", "-").replace("_", "-")
+
+    def is_workspace_allowed(self, workspace_name: str) -> bool:
+        """True si el usuario logueado tiene habilitado el workspace (None = sin filtro)."""
+        return (
+            self.allowed_workspaces is None
+            or self.get_workspace_slug(workspace_name) in self.allowed_workspaces
+        )
 
     def is_workspace_accessible(self, workspace_name: str) -> bool:
         """Return True if the current API key can access the workspace."""
@@ -199,10 +220,7 @@ class InfoHubFileManager:
         and permitted to the logged-in user."""
         accessible = set()
         for name in folder_names:
-            if (
-                self.allowed_workspaces is not None
-                and self.get_workspace_slug(name) not in self.allowed_workspaces
-            ):
+            if not self.is_workspace_allowed(name):
                 continue
             # Sin API key el chequeo /v1 siempre fallaría y ocultaría todo;
             # el alcance ya está limitado por allowed_workspaces.
@@ -281,6 +299,9 @@ class InfoHubFileManager:
 
         Returns True if created, False if already exists or error.
         """
+        if not self.is_workspace_allowed(name):
+            logger.warning(f"Workspace '{name}' no habilitado para el usuario: no se crea")
+            return False
         try:
             url = f"{self.base_url}/api/v1/workspace/new"
             headers = {
@@ -384,6 +405,9 @@ class InfoHubFileManager:
         After uploading documents, this must be called so the vector DB
         is updated and queries can find the documents.
         """
+        if not self.is_workspace_allowed(workspace_name):
+            logger.warning(f"Workspace '{workspace_name}' no habilitado para el usuario: no se actualizan embeddings")
+            return False
         try:
             slug = self.get_workspace_slug(workspace_name)
             docs = self.get_workspace_documents(workspace_name)
@@ -502,6 +526,9 @@ class InfoHubFileManager:
         Returns:
             tuple: (success: bool, skipped: bool, message: str)
         """
+        if not self.is_workspace_allowed(workspace_name):
+            logger.warning(f"Workspace '{workspace_name}' no habilitado para el usuario: no se sube {file_path.name}")
+            return (False, False, "workspace not allowed")
         try:
             # Auto-create workspace if missing + check file existence
             docs = self.get_workspace_documents(workspace_name)
@@ -839,6 +866,12 @@ class InfoHubFileManager:
                 for workspace_folder in item.iterdir():
                     if workspace_folder.is_dir():
                         workspaces_by_name.setdefault(workspace_folder.name, workspace_folder)
+
+        # Only describe images of workspaces the user is allowed to update
+        accessible = self.get_accessible_workspace_names(list(workspaces_by_name.keys()))
+        workspaces_by_name = {
+            name: folder for name, folder in workspaces_by_name.items() if name in accessible
+        }
 
         for workspace_name, workspace_folder in workspaces_by_name.items():
             for file_path in workspace_folder.iterdir():
@@ -1622,6 +1655,7 @@ def _main(page: ft.Page):
                 config.set(key, ctrl.value)
 
         if config.save():
+            previous_base_url = manager.base_url
             manager.api_key = os.getenv("ANYTHINGLLM_API_KEY") or config.get("anythingllm_api_key", "")
             manager.base_url = os.getenv("ANYTHINGLLM_BASE_URL") or config.get("anythingllm_base_url", "http://localhost:3000")
             manager.ollama_url = os.getenv("OLLAMA_BASE_URL") or config.get("ollama_base_url", "http://localhost:11434")
@@ -1634,6 +1668,14 @@ def _main(page: ft.Page):
             page.pop_dialog()
             show_snackbar("Configuración guardada correctamente", Colors.GREEN_700)
             add_log("Configuración actualizada y guardada", "success")
+            # Los workspaces habilitados son de la instancia anterior: re-login
+            if manager.base_url.rstrip("/") != previous_base_url.rstrip("/"):
+                manager.clear_session()
+                login_base_url.value = manager.base_url
+                login_password.value = ""
+                login_error.value = "Cambió la URL de InfoHub: volvé a iniciar sesión."
+                add_log("URL de InfoHub modificada: sesión cerrada", "warning")
+                page.show_dialog(login_dialog)
         else:
             show_snackbar("Error al guardar configuracion", Colors.RED_700)
 
@@ -1681,6 +1723,11 @@ def _main(page: ft.Page):
             nonlocal is_processing
             if is_processing:
                 show_snackbar("Ya hay una operacion en curso", Colors.AMBER_700)
+                return
+            # Fail-closed: sin sesión no hay lista de workspaces habilitados
+            if manager.allowed_workspaces is None:
+                show_snackbar("Iniciá sesión para operar sobre tus workspaces", Colors.AMBER_700)
+                page.show_dialog(login_dialog)
                 return
 
             def execute():

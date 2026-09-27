@@ -1437,6 +1437,84 @@ class TestUserWorkspaceFilter:
         assert result == {"WorkspaceA"}
 
 
+class TestWorkspaceAuthorization:
+    """El usuario solo ve y actualiza los workspaces que tiene habilitados."""
+
+    def test_slug_resolved_from_allowed_name(self, manager):
+        manager.allowed_workspaces = {"gestion-area": "Gestión Área"}
+        assert manager.get_workspace_slug("Gestión Área") == "gestion-area"
+        assert manager.is_workspace_allowed("gestión área")
+
+    def test_is_workspace_allowed(self, manager):
+        manager.allowed_workspaces = {"workspacea": "WorkspaceA"}
+        assert manager.is_workspace_allowed("WorkspaceA")
+        assert not manager.is_workspace_allowed("TeamSpace")
+
+    def test_clear_session(self, manager):
+        manager.session_token = "jwt"
+        manager.allowed_workspaces = {"workspacea": "WorkspaceA"}
+        manager.clear_session()
+        assert manager.session_token == ""
+        assert manager.allowed_workspaces is None
+
+    def test_scan_only_shows_allowed(self, manager, watched_dir):
+        manager.watched_root = str(watched_dir)
+        manager.allowed_workspaces = {"workspacea": "WorkspaceA"}
+        result = manager.scan_files()
+        assert set(result["workspaces"]) == {"WorkspaceA"}
+        assert result["total_files"] == 3
+
+    def test_sort_only_uploads_to_allowed(self, manager, watched_dir):
+        manager.watched_root = str(watched_dir)
+        manager.image_description_active = False
+        manager.allowed_workspaces = {"teamspace": "TeamSpace"}
+        with patch.object(manager, "get_workspace_documents", return_value={"exists": True, "base_names": set(), "doc_names": {}}), \
+             patch.object(manager, "upload_file_to_workspace", return_value=(True, False, "uploaded")) as up, \
+             patch.object(manager, "_update_embeddings", return_value=True):
+            manager.sort_files()
+        assert {c.args[1] for c in up.call_args_list} == {"TeamSpace"}
+
+    def test_full_upload_never_touches_unallowed(self, manager, watched_dir):
+        manager.watched_root = str(watched_dir)
+        manager.allowed_workspaces = {"teamspace": "TeamSpace"}
+        with patch.object(manager, "get_workspace_documents", return_value={"exists": True, "base_names": {"x"}, "doc_names": {"x": "x.json"}}) as docs, \
+             patch.object(manager, "delete_documents", return_value=(True, 1, [])), \
+             patch.object(manager, "upload_file_to_workspace", return_value=(True, False, "uploaded")), \
+             patch.object(manager, "_update_embeddings", return_value=True):
+            result = manager.full_upload_and_clean()
+        assert result["workspaces_processed"] == 1
+        assert {c.args[0] for c in docs.call_args_list} == {"TeamSpace"}
+
+    def test_image_descriptions_only_for_allowed(self, manager, watched_dir):
+        manager.watched_root = str(watched_dir)
+        (watched_dir / "AnythingLLM_Team" / "TeamSpace" / "pic.png").write_text("img")
+        manager.allowed_workspaces = {"teamspace": "TeamSpace"}
+        with patch.object(manager, "_generate_image_description", return_value="desc") as gen:
+            result = manager.create_image_descriptions()
+        assert result["processed"] == 1
+        assert [c.args[0].name for c in gen.call_args_list] == ["pic.png"]
+        assert not (watched_dir / "Infohub_Tech" / "WorkspaceA" / "image1.jpg.image_description.txt").exists()
+
+    def test_upload_refuses_unallowed_workspace(self, manager, tmp_path):
+        manager.allowed_workspaces = {"workspacea": "WorkspaceA"}
+        f = tmp_path / "doc.pdf"
+        f.write_text("x")
+        with patch("requests.post", side_effect=AssertionError("no debe subir")), \
+             patch("requests.get", side_effect=AssertionError("no debe consultar")):
+            assert manager.upload_file_to_workspace(f, "TeamSpace") == (False, False, "workspace not allowed")
+
+    def test_create_refuses_unallowed_workspace(self, manager):
+        manager.allowed_workspaces = {"workspacea": "WorkspaceA"}
+        with patch("requests.post", side_effect=AssertionError("no debe crear")):
+            assert manager.create_workspace("TeamSpace") is False
+
+    def test_update_embeddings_refuses_unallowed_workspace(self, manager):
+        manager.allowed_workspaces = {"workspacea": "WorkspaceA"}
+        with patch("requests.post", side_effect=AssertionError("no debe embeber")), \
+             patch("requests.get", side_effect=AssertionError("no debe consultar")):
+            assert manager._update_embeddings("TeamSpace") is False
+
+
 class TestLogin:
     def _mock_response(self, status_code=200, payload=None):
         response = MagicMock(spec=requests.Response)
