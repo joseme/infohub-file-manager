@@ -1166,7 +1166,7 @@ class TestSortFiles:
         # Count how many times upload is called
         upload_call_count = [0]
 
-        def mock_upload(file_path, workspace_name, skip_if_exists=True):
+        def mock_upload(file_path, workspace_name, workspace_folder=None, skip_if_exists=True):
             upload_call_count[0] += 1
             return (True, False, "uploaded")
 
@@ -1184,6 +1184,51 @@ class TestSortFiles:
         assert result["images_processed"] == 1  # image1.jpg only
         # 5 non-excluded files across 3 workspaces
         assert upload_call_count[0] == 5
+
+    def test_sort_files_recursive_uploads_internal(self, manager, recursive_dir):
+        """Files nested in subfolders are uploaded, not just top-level ones."""
+        manager.watched_root = str(recursive_dir)
+
+        uploaded_paths = []
+
+        def mock_upload(file_path, workspace_name, workspace_folder=None, skip_if_exists=True):
+            uploaded_paths.append(file_path)
+            return (True, False, "uploaded")
+
+        with patch.object(manager, "upload_file_to_workspace", side_effect=mock_upload):
+            with patch.object(manager, "_generate_image_description", return_value="desc"):
+                with patch.object(manager, "_update_embeddings", return_value=True):
+                    with patch.object(manager, "get_workspace_documents", return_value={
+                        "base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True
+                    }):
+                        result = manager.sort_files()
+
+        assert result["status"] == "success"
+        names = [p.name for p in uploaded_paths]
+        assert "doc1.pdf" in names
+        assert any(p.name == "doc3.pdf" and p.parent.name == "Sub" for p in uploaded_paths)
+
+    def test_sort_recursive_ignores_description(self, manager, recursive_dir):
+        """Nested .image_description.txt files are never uploaded."""
+        manager.watched_root = str(recursive_dir)
+
+        uploaded_paths = []
+
+        def mock_upload(file_path, workspace_name, workspace_folder=None, skip_if_exists=True):
+            uploaded_paths.append(file_path)
+            return (True, False, "uploaded")
+
+        with patch.object(manager, "upload_file_to_workspace", side_effect=mock_upload):
+            with patch.object(manager, "_generate_image_description", return_value="desc"):
+                with patch.object(manager, "_update_embeddings", return_value=True):
+                    with patch.object(manager, "get_workspace_documents", return_value={
+                        "base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True
+                    }):
+                        manager.sort_files()
+
+        assert not any(
+            p.name.endswith(".image_description.txt") for p in uploaded_paths
+        )
 
     def test_sort_generates_image_description(self, manager, watched_dir):
         """sort_files should create .image_description.txt files for images."""

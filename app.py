@@ -681,14 +681,14 @@ class InfoHubFileManager:
                 if not docs.get("exists", False):
                     self.create_workspace(workspace_name)
 
-                for file_path in workspace_folder.iterdir():
+                for file_path in workspace_folder.rglob("*"):
                     if file_path.is_file() and not file_path.name.endswith(
                         ".image_description"
                     ) and not file_path.name.endswith(
                         ".image_description.txt"
                     ):
                         success, was_skipped, msg = self.upload_file_to_workspace(
-                            file_path, workspace_name
+                            file_path, workspace_name, workspace_folder=workspace_folder
                         )
                         if success:
                             uploaded += 1
