@@ -24,6 +24,14 @@ Crea una carpeta principal llamada `Infohub_MisDocumentos`. Dentro de ella, crea
 - `Infohub_MisDocumentos/Personal` $\rightarrow$ (Todo aquí irá al espacio de trabajo **Personal**)
 - `Infohub_MisDocumentos/Impuestos_2024` $\rightarrow$ (Todo aquí irá al espacio de trabajo **Impuestos_2024**)
 
+**Subcarpetas dentro de un proyecto:**
+También puedes crear subcarpetas dentro de un proyecto y se subirán igualmente, guardando el nombre de la carpeta en el nombre del archivo remoto. Por ejemplo:
+- `Infohub_MisDocumentos/Trabajo/Sub/archivo.pdf` $\rightarrow$ se sube a **Trabajo** como `Sub__archivo.pdf`.
+- Esto evita colisiones: `Trabajo/A/informe.pdf` y `Trabajo/B/informe.pdf` se suben como `A__informe.pdf` y `B__informe.pdf`, sin pisarse.
+
+> ℹ️ InfoHub no admite carpetas anidadas reales, por eso la carpeta se guarda en el nombre del archivo (separador `__`).
+> Los archivos `.image_description` y `.image_description.txt` no se suben: son textos que genera la propia app.
+
 > ⚠️ **Importante**: Los archivos colocados directamente en la carpeta principal `Infohub_MisDocumentos` son ignorados. **Debes** usar subcarpetas para definir tus espacios de trabajo.
 
 ### 2. Conexión con InfoHub
@@ -72,6 +80,11 @@ Cuando subes una imagen, el programa usa **Ollama Cloud** para "mirar" la imagen
 *   Asegúrate de que el nombre de tu carpeta principal empiece con `Infohub` o `AnythingLLM`.
 *   Haz clic en el botón **"Full Upload"** en el Panel Web para forzar la sincronización.
 
+**"Tengo una subcarpeta dentro de un proyecto, ¿se sube?"**
+*   Sí. Las subcarpetas dentro de un workspace se suben como archivos internos y el nombre de la carpeta se conserva con el separador `__`: `Sub/archivo.pdf` $\rightarrow$ `Sub__archivo.pdf`.
+*   InfoHub no admite carpetas anidadas reales; por eso el nombre de la carpeta se guarda dentro del nombre del archivo. Dos subcarpetas distintas con el mismo nombre de archivo ya no se pisan.
+*   Los archivos `.image_description` y `.image_description.txt` están excluidos y nunca se suben.
+
 **"Las imágenes no tienen descripciones."**
 *   Verifica que la variable `OLLAMA_API_KEY` esté configurada con una clave válida de [ollama.com](https://ollama.com/settings/keys).
 *   Verifica que la configuración `IMAGE_DESCRIPTION_ACTIVATE` esté establecida en `true`.
@@ -88,5 +101,6 @@ Cuando subes una imagen, el programa usa **Ollama Cloud** para "mirar" la imagen
 | **Añadir nuevos archivos** | Ponerlos en una subcarpeta $\rightarrow$ Clic en "Full Upload" |
 | **Actualizar un archivo** | Sobrescribir el archivo en el disco $\rightarrow$ Clic en "Full Upload" |
 | **Eliminar un archivo** | Borrarlo del disco $\rightarrow$ Clic en "Full Upload" |
+| **Subcarpetas dentro de un proyecto** | Crearlas con sus archivos $\rightarrow$ Clic en "Full Upload" (se guardan como `Carpeta__archivo.ext`) |
 | **Crear un nuevo espacio de trabajo** | Crear una nueva subcarpeta $\rightarrow$ Clic en "Full Upload" |
 | **Mejorar búsqueda de imágenes** | Clic en "Create Image Descriptions" |

@@ -105,6 +105,8 @@ El programa escanea carpetas cuyo nombre comience con **`Infohub`** o **`Anythin
     ├── Trabajo/
     │   ├── informe.pdf
     │   └── presentacion.pptx
+    │   └── Sub/
+    │       └── archivo.pdf
     ├── Personal/
     │   ├── notas.txt
     │   └── foto_playa.jpg
@@ -113,7 +115,11 @@ El programa escanea carpetas cuyo nombre comience con **`Infohub`** o **`Anythin
 ```
 
 - `Trabajo`, `Personal` e `Impuestos_2024` se crearán como workspaces en AnythingLLM.
-- Los archivos colocados directamente en `Infohub_MisDocumentos` (sin subcarpeta) serán **ignorados**.
+- Las **subcarpetas dentro de un workspace** (ej. `Trabajo/Sub/`) también se suben como archivos internos del workspace, **preservando la carpeta en el nombre remoto**: `Trabajo/Sub/archivo.pdf` se sube como `Sub__archivo.pdf`. Así, dos subcarpetas distintas con el mismo nombre de archivo (`A/informe.pdf` y `B/informe.pdf`) ya **no colisionan**.
+- Los archivos colocados directamente en `Infohub_MisDocumentos` (sin subcarpeta) siguen **ignorados**.
+- Los archivos `.image_description` y `.image_description.txt` están **excluidos** (son textos generados por la app, no documentos a subir).
+
+> ℹ️ InfoHub/AnythingLLM **no admite carpetas anidadas reales** (su almacenamiento es `carpeta/archivo.json`), por eso la subcarpeta se codifica en el nombre del archivo con el separador `__`.
 
 ---
 
@@ -137,7 +143,7 @@ http://localhost:8500
 
 | Botón | Acción |
 |-------|--------|
-| **📤 Carga Completa y Limpieza** | Crea workspaces automáticamente, sube archivos nuevos, elimina los borrados y actualiza embeddings. |
+| **📤 Carga Completa y Limpieza** | Crea workspaces automáticamente, sube archivos nuevos (incluidas subcarpetas internas), **elimina de InfoHub los archivos borrados localmente** y actualiza embeddings. |
 | **🗂️ Ordenar Archivos** | Organiza documentos en los workspaces correspondientes. |
 | **🧹 Limpiar Carpetas** | Elimina workspaces vacíos. |
 | **🔍 Escanear Archivos** | Previsualiza carpetas y workspaces sin subir nada. |
