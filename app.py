@@ -1555,7 +1555,7 @@ def _main(page: ft.Page):
                         ft.Chip(
                             label=ft.Text(fname, size=12, color=T.TEXT_2),
                             bgcolor=T.ACCENT_WASH,
-                            border=ft.border.Border.all(1, T.BORDER),
+                            border_side=ft.BorderSide(1, T.BORDER),
                         )
                     )
                 if len(data["files"]) > 5:
