@@ -1826,3 +1826,122 @@ class TestLoginWithTicket:
             ok, _, _ = manager.login_with_ticket("allm-tat-XYZ")
         assert ok is False
         assert manager.session_token == ""
+
+
+# ---------------------------------------------------------------------------
+# Recursive folder support — cross-cutting end-to-end
+# ---------------------------------------------------------------------------
+
+
+class TestRecursiveE2ECrossCutting:
+    UUID_A = "d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c"
+    UUID_B = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    UUID_C = "11111111-2222-3333-4444-555555555555"
+    UUID_D = "99999999-8888-7777-6666-555555555555"
+
+    def test_recursive_e2e_cross_cutting(self, manager, recursive_dir):
+        """scan → sort → full_upload_and_clean round trip over a nested tree.
+
+        Covers: recursive discovery, folder-qualified remote names, no false
+        orphans, and prefix-safe selective deletion (informe_final vs informe).
+        """
+        ws = recursive_dir / "Infohub_Tech" / "WorkspaceA"
+        (ws / "SubA").mkdir()
+        (ws / "SubB").mkdir()
+        (ws / "raiz").mkdir()
+        (ws / "SubA" / "informe.pdf").write_text("a")
+        (ws / "SubB" / "informe.pdf").write_text("b")
+        (ws / "raiz.pdf").write_text("r")
+        (ws / "raiz" / "informe_final.pdf").write_text("rf")
+        (ws / "SubA" / "foto.jpg").write_bytes(b"jpg")
+        (ws / "SubA" / "foto.jpg.image_description.txt").write_text("desc")
+
+        manager.watched_root = str(recursive_dir)
+
+        # --- 1. scan_files lists nested files, excludes descriptions -------
+        scan = manager.scan_files()
+        assert scan["status"] == "success"
+        files = scan["workspaces"]["WorkspaceA"]["files"]
+        for rel in (
+            "SubA/informe.pdf",
+            "SubB/informe.pdf",
+            "raiz.pdf",
+            "raiz/informe_final.pdf",
+        ):
+            assert rel in files, rel
+        assert all(not f.endswith(".image_description.txt") for f in files)
+
+        # --- 2. sort_files uploads with folder-qualified names -------------
+        uploaded = []
+
+        def record_upload(file_path, workspace_name, workspace_folder=None, skip_if_exists=True):
+            uploaded.append(manager._remote_name(manager._rel_path(file_path, workspace_folder)))
+            return (True, False, "uploaded")
+
+        empty_docs = {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
+        with patch.object(manager, "upload_file_to_workspace", side_effect=record_upload), \
+             patch.object(manager, "get_workspace_documents", return_value=empty_docs), \
+             patch.object(manager, "_update_embeddings", return_value=True), \
+             patch.object(manager, "_generate_image_description", return_value="desc"):
+            sort = manager.sort_files()
+
+        assert sort["status"] == "success"
+        assert "SubA__informe.pdf" in uploaded
+        assert "SubB__informe.pdf" in uploaded
+        assert "raiz.pdf" in uploaded
+        assert "raiz__informe_final.pdf" in uploaded
+        assert "SubA__foto.jpg" in uploaded
+        assert not any(u.endswith(".image_description.txt") for u in uploaded)
+
+        # --- 3-5. full_upload_and_clean orphan handling --------------------
+        remote_state = {
+            "base_names": {
+                f"SubA__informe-{self.UUID_A}",
+                f"SubB__informe-{self.UUID_B}",
+                f"raiz-{self.UUID_C}",
+                f"raiz__informe_final-{self.UUID_D}",
+            },
+        }
+        remote_state["doc_names"] = {b: f"{b}.json" for b in remote_state["base_names"]}
+
+        deleted_docs = []
+
+        def get_docs(name):
+            if name == "WorkspaceA":
+                return {**remote_state, "raw_docs": [], "exists": True}
+            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
+
+        def mock_delete(names):
+            deleted_docs.extend(names)
+            for name in names:
+                for base, full in list(remote_state["doc_names"].items()):
+                    if full == name:
+                        remote_state["base_names"].discard(base)
+                        del remote_state["doc_names"][base]
+            return (True, len(names), [])
+
+        def run_full():
+            deleted_docs.clear()
+            with patch.object(manager, "get_workspace_documents", side_effect=get_docs), \
+                 patch.object(manager, "delete_documents", side_effect=mock_delete), \
+                 patch.object(manager, "upload_file_to_workspace", side_effect=record_upload), \
+                 patch.object(manager, "_update_embeddings", return_value=True), \
+                 patch.object(manager, "_generate_image_description", return_value="desc"):
+                return manager.full_upload_and_clean(), list(deleted_docs)
+
+        # 3. Remote knows all four → no false orphans
+        result, deleted = run_full()
+        assert result["deleted"] == 0
+        assert deleted == []
+
+        # 4. Remove SubB/informe.pdf → only the SubB doc is deleted
+        (ws / "SubB" / "informe.pdf").unlink()
+        result, deleted = run_full()
+        assert result["deleted"] == 1
+        assert deleted == [f"SubB__informe-{self.UUID_B}.json"]
+
+        # 5. Remove raiz/informe_final.pdf → only informe_final, not informe
+        (ws / "raiz" / "informe_final.pdf").unlink()
+        result, deleted = run_full()
+        assert result["deleted"] == 1
+        assert deleted == [f"raiz__informe_final-{self.UUID_D}.json"]
