@@ -773,15 +773,22 @@ class InfoHubFileManager:
             for workspace_name, workspace_folder in workspaces_by_name.items():
                 workspaces_processed += 1
 
-                # --- Step 1: Collect local files (base names) ---
-                local_base_names = set()
-                for file_path in workspace_folder.iterdir():
-                    if file_path.is_file() and not file_path.name.endswith(
-                        ".image_description"
-                    ) and not file_path.name.endswith(
-                        ".image_description.txt"
-                    ):
-                        local_base_names.add(file_path.stem)
+                # --- Step 1: Collect local files (folder-qualified remote names) ---
+                collection_failed = False
+                archivos = []
+                try:
+                    archivos = [
+                        f for f in workspace_folder.rglob("*")
+                        if f.is_file()
+                        and not f.name.endswith(".image_description")
+                        and not f.name.endswith(".image_description.txt")
+                    ]
+                except Exception:
+                    collection_failed = True
+                local_remote_names = {
+                    self._remote_name(self._rel_path(f, workspace_folder))
+                    for f in archivos
+                }
 
                 # --- Step 2: Find and delete orphaned remote documents ---
                 docs_info = self.get_workspace_documents(workspace_name)
@@ -791,11 +798,18 @@ class InfoHubFileManager:
                 remote_base_names = docs_info["base_names"]
                 doc_names_map = docs_info["doc_names"]
 
-                orphaned = [
-                    doc_names_map[base]
-                    for base in remote_base_names
-                    if base not in local_base_names and base in doc_names_map
-                ]
+                if collection_failed:
+                    orphaned = []
+                else:
+                    orphaned = [
+                        doc_names_map[b]
+                        for b in remote_base_names
+                        if b in doc_names_map
+                        and not any(
+                            self._remote_base_matches(b, n)
+                            for n in local_remote_names
+                        )
+                    ]
 
                 if orphaned:
                     logger.info(
@@ -810,19 +824,15 @@ class InfoHubFileManager:
                         delete_errors.extend(errs)
 
                 # --- Step 3: Upload local files ---
-                for file_path in workspace_folder.iterdir():
-                    if file_path.is_file() and not file_path.name.endswith(
-                        ".image_description"
-                    ) and not file_path.name.endswith(
-                        ".image_description.txt"
-                    ):
-                        success, was_skipped, msg = self.upload_file_to_workspace(
-                            file_path, workspace_name
-                        )
-                        if success:
-                            uploaded += 1
-                        elif was_skipped:
-                            skipped += 1
+                for file_path in archivos:
+                    success, was_skipped, msg = self.upload_file_to_workspace(
+                        file_path, workspace_name,
+                        workspace_folder=workspace_folder,
+                    )
+                    if success:
+                        uploaded += 1
+                    elif was_skipped:
+                        skipped += 1
 
                 # --- Step 4: Update embeddings ---
                 self._update_embeddings(workspace_name)

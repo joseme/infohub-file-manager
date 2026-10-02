@@ -1344,7 +1344,7 @@ class TestFullUploadAndClean:
             delete_results["called_with"] = doc_names
             return (True, len(doc_names), [])
 
-        def mock_upload(fp, ws, skip=True):
+        def mock_upload(fp, ws, workspace_folder=None, skip=True):
             return (True, False, "uploaded")
 
         with patch.object(manager, "get_workspace_documents", side_effect=mock_get_docs):
@@ -1400,10 +1400,114 @@ class TestFullUploadAndClean:
         assert result["status"] == "success"
         mock_create.assert_called_once_with("EmptyWS")
 
+    def test_full_upload_recursive_no_false_orphans(self, manager, recursive_dir):
+        """Same-stem files in different subfolders are not treated as orphans."""
+        manager.watched_root = str(recursive_dir)
+        ws = recursive_dir / "Infohub_Tech" / "WorkspaceA"
+        (ws / "SubA").mkdir()
+        (ws / "SubB").mkdir()
+        (ws / "SubA" / "informe.pdf").write_text("content")
+        (ws / "SubB" / "informe.pdf").write_text("content")
+
+        uuid_a = "d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c"
+        uuid_b = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+        def mock_get_docs(ws_name):
+            if ws_name == "WorkspaceA":
+                return {
+                    "base_names": {f"SubA__informe-{uuid_a}", f"SubB__informe-{uuid_b}"},
+                    "doc_names": {
+                        f"SubA__informe-{uuid_a}": f"SubA__informe-{uuid_a}.json",
+                        f"SubB__informe-{uuid_b}": f"SubB__informe-{uuid_b}.json",
+                    },
+                    "raw_docs": [],
+                    "exists": True,
+                }
+            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
+
+        with patch.object(manager, "get_workspace_documents", side_effect=mock_get_docs):
+            with patch.object(manager, "delete_documents") as mock_delete:
+                with patch.object(manager, "upload_file_to_workspace", return_value=(True, False, "uploaded")):
+                    with patch.object(manager, "_update_embeddings", return_value=True):
+                        result = manager.full_upload_and_clean()
+
+        assert result["deleted"] == 0
+        mock_delete.assert_not_called()
+
+    def test_full_upload_recursive_prefix_collision_selective_delete(self, manager, recursive_dir):
+        """Deleting informe_final.pdf must not delete informe.pdf (prefix collision)."""
+        manager.watched_root = str(recursive_dir)
+        ws = recursive_dir / "Infohub_Tech" / "WorkspaceA"
+        (ws / "raiz").mkdir()
+        (ws / "raiz" / "informe.pdf").write_text("content")
+        (ws / "raiz" / "informe_final.pdf").write_text("content")
+
+        uuid_a = "d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c"
+        uuid_b = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        base_informe = f"raiz__informe-{uuid_a}"
+        base_final = f"raiz__informe_final-{uuid_b}"
+
+        def mock_get_docs(ws_name):
+            if ws_name == "WorkspaceA":
+                return {
+                    "base_names": {base_informe, base_final},
+                    "doc_names": {
+                        base_informe: f"{base_informe}.json",
+                        base_final: f"{base_final}.json",
+                    },
+                    "raw_docs": [],
+                    "exists": True,
+                }
+            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
+
+        deleted_docs = []
+
+        def mock_delete(doc_names):
+            deleted_docs.extend(doc_names)
+            return (True, len(doc_names), [])
+
+        (ws / "raiz" / "informe_final.pdf").unlink()
+
+        with patch.object(manager, "get_workspace_documents", side_effect=mock_get_docs):
+            with patch.object(manager, "delete_documents", side_effect=mock_delete):
+                with patch.object(manager, "upload_file_to_workspace", return_value=(True, False, "uploaded")):
+                    with patch.object(manager, "_update_embeddings", return_value=True):
+                        result = manager.full_upload_and_clean()
+
+        assert result["deleted"] == 1
+        assert deleted_docs == [f"{base_final}.json"]
+
+    def test_full_upload_recursive_collection_failed(self, manager, recursive_dir, monkeypatch):
+        """If recursive collection raises, no orphan deletion happens."""
+        manager.watched_root = str(recursive_dir)
+
+        def mock_get_docs(ws_name):
+            if ws_name == "WorkspaceA":
+                return {
+                    "base_names": {"doc_orphan"},
+                    "doc_names": {"doc_orphan": "doc_orphan.abc.json"},
+                    "raw_docs": [],
+                    "exists": True,
+                }
+            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
+
+        def boom(self, *args, **kwargs):
+            raise OSError("rglob failed")
+
+        monkeypatch.setattr(Path, "rglob", boom)
+
+        with patch.object(manager, "get_workspace_documents", side_effect=mock_get_docs):
+            with patch.object(manager, "delete_documents") as mock_delete:
+                with patch.object(manager, "upload_file_to_workspace", return_value=(True, False, "uploaded")):
+                    with patch.object(manager, "_update_embeddings", return_value=True):
+                        result = manager.full_upload_and_clean()
+
+        assert result["deleted"] == 0
+        mock_delete.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # create_image_descriptions
-# ---------------------------------------------------------------------------
 
 
 class TestCreateImageDescriptions:
