@@ -15,12 +15,14 @@ from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
 import flet as ft
-from flet import Icons, Colors
+from flet import Icons
+import ui_theme as T
 from dotenv import load_dotenv
-from config_manager import ConfigManager, DEFAULTS
+from config_manager import ConfigManager, DEFAULTS, BASE_DIR
 
 # Load environment variables
-load_dotenv()
+# Anclado al dir del ejecutable, no al CWD: si no, doble click no lee el .env
+load_dotenv(BASE_DIR / ".env")
 
 # Configure logging
 logging.basicConfig(
@@ -427,6 +429,33 @@ class InfoHubFileManager:
         # ponytail: match por prefijo canónico; un stem prefijo de otro archivo
         # ('Reporte', 'ReporteFinal') puede colisionar — separar por uuid si pasa.
         return self._canonical_name(base).startswith(self._canonical_name(stem))
+
+    def _rel_path(self, file_path, workspace_folder) -> str:
+        try:
+            rel = file_path.relative_to(workspace_folder)
+        except ValueError:
+            rel = Path(file_path.name)
+        return rel.as_posix()
+
+    def _remote_name(self, rel_path) -> str:
+        return rel_path.replace("/", "__")
+
+    def _remote_stem(self, rel_path) -> str:
+        return str(Path(self._remote_name(rel_path)).with_suffix(""))
+
+    def _remote_base_matches(self, server_base: str, local_remote_name: str) -> bool:
+        forms = {
+            self._canonical_name(Path(local_remote_name).stem),
+            self._canonical_name(local_remote_name),
+        }
+        if self._canonical_name(server_base) in forms:
+            return True
+        stripped = re.sub(
+            r"([-.](?:[0-9a-fA-F]{6,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))$",
+            "",
+            server_base,
+        )
+        return self._canonical_name(stripped) in forms
 
     def _update_embeddings(self, workspace_name: str) -> bool:
         """Trigger embedding generation for all documents in a workspace.
@@ -951,7 +980,7 @@ def main(page: ft.Page):
         import traceback
         traceback.print_exc()
         page.add(ft.Column([
-            ft.Text(f"Error: {e}", color=ft.Colors.RED_500, size=17),
+            ft.Text(f"Error: {e}", color=T.DANGER, size=17),
         ]))
         page.update()
 
@@ -960,67 +989,60 @@ def _main(page: ft.Page):
     # ========== PAGE CONFIGURATION ==========
     config = ConfigManager()
     page.title = config.get("app_title", "InfoHub File Manager")
-    page.theme_mode = ft.ThemeMode.SYSTEM
+    page.theme_mode = ft.ThemeMode.DARK
     page.padding = 0
     page.spacing = 0
+    page.bgcolor = T.BG_PRIMARY
 
-    # Custom theme colors
-    page.theme = ft.Theme(
-        color_scheme_seed="#2563EB",
-        use_material3=True,
-    )
+    # InfoHub DMS theme ("Azul profesional" — frontend/src/index.css)
+    page.theme = T.page_theme()
 
     manager = InfoHubFileManager(config)
 
     # ========== LOGIN DIALOG ==========
-    login_base_url = ft.TextField(
+    login_base_url = T.textfield(
         label="URL InfoHub",
         value=manager.base_url or "http://localhost:3001",
         dense=True,
         content_padding=ft.padding.Padding.symmetric(horizontal=10, vertical=8),
         text_size=13,
-        border_color=Colors.BLUE_GREY_300,
-        focused_border_color=Colors.INDIGO_500,
         width=360,
     )
-    login_username = ft.TextField(
+    login_username = T.textfield(
         label="Usuario",
         dense=True,
         content_padding=ft.padding.Padding.symmetric(horizontal=10, vertical=8),
         text_size=13,
-        border_color=Colors.BLUE_GREY_300,
-        focused_border_color=Colors.INDIGO_500,
         width=360,
     )
-    login_password = ft.TextField(
+    login_password = T.textfield(
         label="Contraseña",
         password=True,
         can_reveal_password=True,
         dense=True,
         content_padding=ft.padding.Padding.symmetric(horizontal=10, vertical=8),
         text_size=13,
-        border_color=Colors.BLUE_GREY_300,
-        focused_border_color=Colors.INDIGO_500,
         width=360,
         on_submit=lambda e: _handle_login(),
     )
-    login_error = ft.Text("", color=Colors.RED_600, size=13)
+    login_error = ft.Text("", color=T.DANGER, size=13)
     if config.last_error:
         login_error.value = f"config.json invalido: {config.last_error}. Se estan usando valores por defecto."
-        login_error.color = Colors.AMBER_600
+        login_error.color = T.WARN
     login_progress = ft.ProgressRing(width=18, height=18, stroke_width=2, visible=False)
     login_dialog = ft.AlertDialog(
         modal=True,
+        bgcolor=T.BG_SECONDARY,
         title=ft.Row(
             [
-                ft.Icon(Icons.LOCK, color=Colors.INDIGO_500),
-                ft.Text("Iniciar sesión en InfoHub", size=18, weight=ft.FontWeight.BOLD),
+                ft.Icon(Icons.LOCK, color=T.ACCENT_HOVER),
+                ft.Text("Iniciar sesión en InfoHub", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
             ],
             spacing=8,
         ),
         content=ft.Column(
             [
-                ft.Text("Accedé con tu usuario y contraseña de InfoHub. Solo verás los workspaces que tenés habilitados.", size=13, color=Colors.BLUE_GREY_600),
+                ft.Text("Accedé con tu usuario y contraseña de InfoHub. Solo verás los workspaces que tenés habilitados.", size=13, color=T.TEXT_2),
                 ft.Container(height=8),
                 login_base_url,
                 login_username,
@@ -1041,9 +1063,9 @@ def _main(page: ft.Page):
                 icon=Icons.LOGIN,
                 on_click=lambda e: _handle_login(),
                 style=ft.ButtonStyle(
-                    bgcolor=Colors.INDIGO_600,
-                    color=Colors.WHITE,
-                    shape=ft.RoundedRectangleBorder(radius=8),
+                    bgcolor=T.ACCENT,
+                    color=T.TEXT,
+                    shape=T.SHAPE,
                 ),
             ),
         ],
@@ -1053,10 +1075,11 @@ def _main(page: ft.Page):
     user_ws_list = ft.Column(spacing=6, scroll=ft.ScrollMode.AUTO)
     user_ws_dialog = ft.AlertDialog(
         modal=True,
+        bgcolor=T.BG_SECONDARY,
         title=ft.Row(
             [
-                ft.Icon(Icons.FOLDER_SPECIAL, color=Colors.INDIGO_500),
-                ft.Text("Tus workspaces habilitados", size=18, weight=ft.FontWeight.BOLD),
+                ft.Icon(Icons.FOLDER_SPECIAL, color=T.ACCENT_HOVER),
+                ft.Text("Tus workspaces habilitados", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
             ],
             spacing=8,
         ),
@@ -1067,9 +1090,9 @@ def _main(page: ft.Page):
                 icon=Icons.CHECK,
                 on_click=lambda e: page.pop_dialog(),
                 style=ft.ButtonStyle(
-                    bgcolor=Colors.INDIGO_600,
-                    color=Colors.WHITE,
-                    shape=ft.RoundedRectangleBorder(radius=8),
+                    bgcolor=T.ACCENT,
+                    color=T.TEXT,
+                    shape=T.SHAPE,
                 ),
             ),
         ],
@@ -1081,9 +1104,9 @@ def _main(page: ft.Page):
             user_ws_list.controls = [
                 ft.Row(
                     [
-                        ft.Icon(Icons.FOLDER, color=Colors.INDIGO_500, size=18),
+                        ft.Icon(Icons.FOLDER, color=T.ACCENT_HOVER, size=18),
                         ft.Text(name, size=14, expand=True),
-                        ft.Text(slug, size=11, color=Colors.BLUE_GREY_400),
+                        ft.Text(slug, size=11, color=T.TEXT_3),
                     ],
                     spacing=8,
                 )
@@ -1094,7 +1117,7 @@ def _main(page: ft.Page):
                 ft.Text(
                     "No tenés workspaces habilitados.",
                     size=14,
-                    color=Colors.BLUE_GREY_500,
+                    color=T.TEXT_2,
                     italic=True,
                 )
             ]
@@ -1113,13 +1136,13 @@ def _main(page: ft.Page):
             return False
 
     def _after_login(username: str, base_url: str):
-        show_snackbar(f"Sesión iniciada como {username}", Colors.GREEN_700)
+        show_snackbar(f"Sesión iniciada como {username}", T.OK_DEEP)
         add_log(
             f"Login exitoso (usuario: {username}) - Workspaces habilitados: {len(manager.allowed_workspaces or {})}",
             "success",
         )
         if not manager.api_key or not _validate_credentials(base_url, manager.api_key):
-            show_snackbar("API Key InfoHub ausente o inválida en config.json: la sincronización fallará hasta configurarla", Colors.RED_600)
+            show_snackbar("API Key InfoHub ausente o inválida en config.json: la sincronización fallará hasta configurarla", T.DANGER)
             add_log("Advertencia: API Key InfoHub ausente o inválida. Configúrala en Ajustes para poder sincronizar.", "warning")
         _show_user_workspaces()
 
@@ -1189,17 +1212,17 @@ def _main(page: ft.Page):
 
     # --- SnackBar for notifications ---
     snackbar = ft.SnackBar(
-        content=ft.Text(""),
+        content=ft.Text("", color=T.TEXT),
         action=ft.SnackBarAction(
             label="Cerrar",
             on_click=lambda e: setattr(snackbar, "open", False),
         ),
-        bgcolor=Colors.BLUE_GREY_800,
+        bgcolor=T.BG_POPUP,
         duration=4000,
     )
     page.overlay.append(snackbar)
 
-    def show_snackbar(message, color=Colors.BLUE_GREY_800):
+    def show_snackbar(message, color=T.BG_POPUP):
         snackbar.content.value = message
         snackbar.bgcolor = color
         snackbar.open = True
@@ -1207,51 +1230,47 @@ def _main(page: ft.Page):
 
     # --- Stats Cards ---
     def create_stat_card(value, label, icon, color):
-        return ft.Card(
-            content=ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Container(
-                            content=ft.Icon(icon, color=Colors.WHITE, size=28),
-                            bgcolor=color,
-                            border_radius=12,
-                            padding=12,
-                            width=52,
-                            height=52,
-                            alignment=ft.alignment.Alignment(0, 0),
-                        ),
-                        ft.Column(
-                            [
-                                ft.Text(
-                                    str(value),
-                                    size=24,
-                                    weight=ft.FontWeight.BOLD,
-                                    color=Colors.BLUE_GREY_800,
-                                ),
-                                ft.Text(
-                                    label,
-                                    size=13,
-                                    color=Colors.BLUE_GREY_500,
-                                    weight=ft.FontWeight.W_500,
-                                ),
-                            ],
-                            spacing=2,
-                            alignment=ft.MainAxisAlignment.CENTER,
-                        ),
-                    ],
-                    spacing=15,
-                    alignment=ft.MainAxisAlignment.START,
-                ),
-                padding=20,
+        return T.card(
+            ft.Row(
+                [
+                    ft.Container(
+                        content=ft.Icon(icon, color=T.TEXT, size=22),
+                        bgcolor=color,
+                        border_radius=T.RADIUS,
+                        padding=10,
+                        width=44,
+                        height=44,
+                        alignment=ft.alignment.Alignment(0, 0),
+                    ),
+                    ft.Column(
+                        [
+                            ft.Text(
+                                str(value),
+                                size=24,
+                                weight=ft.FontWeight.BOLD,
+                                color=T.TEXT,
+                            ),
+                            ft.Text(
+                                label,
+                                size=13,
+                                color=T.TEXT_2,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                        ],
+                        spacing=2,
+                        alignment=ft.MainAxisAlignment.CENTER,
+                    ),
+                ],
+                spacing=15,
+                alignment=ft.MainAxisAlignment.START,
             ),
-            elevation=2,
             col={"xs": 6, "sm": 6, "md": 3, "lg": 3, "xl": 3},
         )
 
-    workspaces_stat = create_stat_card("0", "Workspaces", Icons.FOLDER_COPY, Colors.INDIGO_500)
-    files_stat = create_stat_card("0", "Archivos", Icons.DESCRIPTION, Colors.GREEN_500)
-    uploaded_stat = create_stat_card("0", "Subidos", Icons.CLOUD_UPLOAD, Colors.CYAN_600)
-    pending_stat = create_stat_card("0", "Pendientes", Icons.SCHEDULE, Colors.AMBER_500)
+    workspaces_stat = create_stat_card("0", "Workspaces", Icons.FOLDER_COPY, T.ACCENT)
+    files_stat = create_stat_card("0", "Archivos", Icons.DESCRIPTION, T.TEAL)
+    uploaded_stat = create_stat_card("0", "Subidos", Icons.CLOUD_UPLOAD, T.OK_DEEP)
+    pending_stat = create_stat_card("0", "Pendientes", Icons.SCHEDULE, T.WARN_DEEP)
 
     def update_stats(result=None):
         if not result or result.get("status") not in ("success", "warning"):
@@ -1290,7 +1309,7 @@ def _main(page: ft.Page):
     status_indicator = ft.Container(
         width=10,
         height=10,
-        bgcolor=Colors.GREEN_500,
+        bgcolor=T.OK,
         border_radius=5,
     )
 
@@ -1298,7 +1317,7 @@ def _main(page: ft.Page):
         "Sistema listo",
         size=14,
         weight=ft.FontWeight.W_500,
-        color=Colors.BLUE_GREY_700,
+        color=T.TEXT,
     )
 
     progress_ring = ft.ProgressRing(width=16, height=16, stroke_width=2, visible=False)
@@ -1311,12 +1330,12 @@ def _main(page: ft.Page):
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         ),
-        padding=ft.padding.Padding.symmetric(horizontal=20, vertical=12),
-        bgcolor=Colors.BLUE_GREY_50,
-        border=ft.border.Border.only(bottom=ft.border.BorderSide(1, Colors.BLUE_GREY_200)),
+        padding=ft.padding.Padding.symmetric(horizontal=24, vertical=12),
+        bgcolor=T.BG_SECONDARY,
+        border=T.BORDER_BOTTOM,
     )
 
-    def set_status(text, color=Colors.GREEN_500, loading=False):
+    def set_status(text, color=T.OK, loading=False):
         status_indicator.bgcolor = color
         status_text.value = text
         progress_ring.visible = loading
@@ -1327,63 +1346,49 @@ def _main(page: ft.Page):
         badge = None
         if badge_text:
             badge = ft.Container(
-                content=ft.Text(badge_text, size=10, weight=ft.FontWeight.BOLD, color=Colors.WHITE),
+                content=ft.Text(badge_text, size=10, weight=ft.FontWeight.BOLD, color=T.TEXT),
                 bgcolor=color,
-                border_radius=12,
+                border_radius=T.RADIUS,
                 padding=ft.padding.Padding.symmetric(horizontal=8, vertical=2),
             )
 
-        return ft.Card(
-            content=ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Row(
-                            [
-                                ft.Container(
-                                    content=ft.Icon(icon, color=Colors.WHITE, size=24),
-                                    bgcolor=color,
-                                    border_radius=10,
-                                    padding=10,
-                                    width=44,
-                                    height=44,
-                                    alignment=ft.alignment.Alignment(0, 0),
-                                ),
-                                ft.Container(expand=True),
-                                badge if badge else ft.Container(),
-                            ],
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        ),
-                        ft.Text(
-                            title,
-                            size=15,
-                            weight=ft.FontWeight.BOLD,
-                            color=Colors.BLUE_GREY_800,
-                        ),
-                        ft.Text(
-                            description,
-                            size=13,
-                            color=Colors.BLUE_GREY_500,
-                            max_lines=2,
-                            overflow=ft.TextOverflow.ELLIPSIS,
-                        ),
-                        ft.FilledButton(
-                            "Ejecutar",
-                            icon=Icons.PLAY_ARROW_ROUNDED,
-                            on_click=on_click,
-                            style=ft.ButtonStyle(
+        return T.card(
+            ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Container(
+                                content=ft.Icon(icon, color=T.TEXT, size=22),
                                 bgcolor=color,
-                                color=Colors.WHITE,
-                                shape=ft.RoundedRectangleBorder(radius=8),
-                                padding=ft.padding.Padding.symmetric(horizontal=16, vertical=10),
+                                border_radius=T.RADIUS,
+                                padding=10,
+                                width=44,
+                                height=44,
+                                alignment=ft.alignment.Alignment(0, 0),
                             ),
-                        ),
-                    ],
-                    spacing=10,
-                    alignment=ft.MainAxisAlignment.START,
-                ),
-                padding=20,
+                            ft.Container(expand=True),
+                            badge if badge else ft.Container(),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Text(
+                        title,
+                        size=15,
+                        weight=ft.FontWeight.BOLD,
+                        color=T.TEXT,
+                    ),
+                    ft.Text(
+                        description,
+                        size=13,
+                        color=T.TEXT_2,
+                        max_lines=2,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                    T.primary_button("Ejecutar", Icons.PLAY_ARROW_ROUNDED, on_click),
+                ],
+                spacing=10,
+                alignment=ft.MainAxisAlignment.START,
             ),
-            elevation=2,
             col={"xs": 12, "sm": 6, "md": 4, "lg": 4, "xl": 3},
         )
 
@@ -1398,11 +1403,11 @@ def _main(page: ft.Page):
     def add_log(message, level="info"):
         timestamp = datetime.now().strftime("%H:%M:%S")
         color = {
-            "info": Colors.INDIGO_500,
-            "success": Colors.GREEN_500,
-            "warning": Colors.AMBER_500,
-            "error": Colors.RED_500,
-        }.get(level, Colors.BLUE_GREY_500)
+            "info": T.ACCENT_HOVER,
+            "success": T.OK,
+            "warning": T.WARN,
+            "error": T.DANGER,
+        }.get(level, T.TEXT_2)
 
         log_entry = ft.Container(
             content=ft.Row(
@@ -1419,13 +1424,13 @@ def _main(page: ft.Page):
                             ft.Text(
                                 f"{timestamp}",
                                 size=11,
-                                color=Colors.BLUE_GREY_400,
+                                color=T.TEXT_3,
                                 weight=ft.FontWeight.W_500,
                             ),
                             ft.Text(
                                 message,
                                 size=13,
-                                color=Colors.BLUE_GREY_700,
+                                color=T.TEXT,
                                 selectable=True,
                             ),
                         ],
@@ -1436,8 +1441,8 @@ def _main(page: ft.Page):
                 vertical_alignment=ft.CrossAxisAlignment.START,
             ),
             padding=8,
-            border_radius=6,
-            bgcolor=Colors.BLUE_GREY_50,
+            border_radius=T.RADIUS,
+            bgcolor=T.BG_INPUT,
         )
 
         logs_list.controls.append(log_entry)
@@ -1452,8 +1457,9 @@ def _main(page: ft.Page):
     # --- Confirmation Dialog ---
     confirm_dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text("Confirmar Operacion"),
-        content=ft.Text("Estas seguro de que deseas ejecutar esta operacion?"),
+        bgcolor=T.BG_SECONDARY,
+        title=ft.Text("Confirmar Operacion", color=T.TEXT),
+        content=ft.Text("Estas seguro de que deseas ejecutar esta operacion?", color=T.TEXT_2),
         actions=[
             ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
             ft.FilledButton("Confirmar", on_click=lambda e: None),
@@ -1464,11 +1470,12 @@ def _main(page: ft.Page):
 
     progress_dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text("Procesando..."),
+        bgcolor=T.BG_SECONDARY,
+        title=ft.Text("Procesando...", color=T.TEXT),
         content=ft.Column(
             [
                 ft.ProgressRing(width=40, height=40),
-                ft.Text("Ejecutando operacion, por favor espere..."),
+                ft.Text("Ejecutando operacion, por favor espere...", color=T.TEXT_2),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=20,
@@ -1492,7 +1499,8 @@ def _main(page: ft.Page):
     # --- Workspace Explorer Dialog ---
     explorer_dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text("Workspaces Encontrados"),
+        bgcolor=T.BG_SECONDARY,
+        title=ft.Text("Workspaces Encontrados", color=T.TEXT),
         content=ft.Container(width=500, height=400),
         actions=[
             ft.TextButton("Cerrar", on_click=lambda e: page.pop_dialog()),
@@ -1507,8 +1515,8 @@ def _main(page: ft.Page):
             explorer_dialog.content = ft.Container(
                 content=ft.Column(
                     [
-                        ft.Icon(Icons.FOLDER_OFF, size=48, color=Colors.BLUE_GREY_300),
-                        ft.Text("No se encontraron workspaces", color=Colors.BLUE_GREY_500),
+                        ft.Icon(Icons.FOLDER_OFF, size=48, color=T.BORDER_STRONG),
+                        ft.Text("No se encontraron workspaces", color=T.TEXT_2),
                     ],
                     alignment=ft.MainAxisAlignment.CENTER,
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1524,13 +1532,14 @@ def _main(page: ft.Page):
                 for fname in data["files"][:5]:
                     files_chips.append(
                         ft.Chip(
-                            label=ft.Text(fname, size=12),
-                            bgcolor=Colors.INDIGO_50,
+                            label=ft.Text(fname, size=12, color=T.TEXT_2),
+                            bgcolor=T.ACCENT_WASH,
+                            border=ft.border.Border.all(1, T.BORDER),
                         )
                     )
                 if len(data["files"]) > 5:
                     files_chips.append(
-                        ft.Text(f"+{len(data['files']) - 5} mas", size=12, color=Colors.BLUE_GREY_500)
+                        ft.Text(f"+{len(data['files']) - 5} mas", size=12, color=T.TEXT_2)
                     )
 
                 workspace_items.append(
@@ -1539,31 +1548,32 @@ def _main(page: ft.Page):
                             [
                                 ft.Row(
                                     [
-                                        ft.Icon(Icons.FOLDER, color=Colors.INDIGO_500, size=20),
-                                        ft.Text(name, size=14, weight=ft.FontWeight.BOLD),
+                                        ft.Icon(Icons.FOLDER, color=T.ACCENT_HOVER, size=20),
+                                        ft.Text(name, size=14, weight=ft.FontWeight.BOLD, color=T.TEXT),
                                         ft.Container(expand=True),
                                         ft.Container(
-                                            content=ft.Text(f"{data['file_count']}", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                                            bgcolor=ft.Colors.INDIGO_500,
+                                            content=ft.Text(f"{data['file_count']}", size=11, weight=ft.FontWeight.BOLD, color=T.TEXT),
+                                            bgcolor=T.ACCENT_HOVER,
                                             border_radius=12,
                                             padding=ft.padding.Padding.symmetric(horizontal=8, vertical=2),
                                         ),
                                     ],
                                     spacing=8,
                                 ),
-                                ft.Text(data["path"], size=11, color=Colors.BLUE_GREY_400),
+                                ft.Text(data["path"], size=11, color=T.TEXT_3),
                                 ft.Row(
                                     files_chips,
                                     spacing=4,
                                     run_spacing=4,
                                     wrap=True,
-                                ) if files_chips else ft.Text("Sin archivos", size=12, color=Colors.BLUE_GREY_400, italic=True),
+                                ) if files_chips else ft.Text("Sin archivos", size=12, color=T.TEXT_3, italic=True),
                             ],
                             spacing=6,
                         ),
                         padding=12,
-                        border_radius=8,
-                        bgcolor=Colors.BLUE_GREY_50,
+                        border_radius=T.RADIUS,
+                        bgcolor=T.BG_INPUT,
+                        border=ft.border.Border.all(1, T.BORDER),
                         margin=ft.margin.Margin.only(bottom=8),
                     )
                 )
@@ -1593,19 +1603,20 @@ def _main(page: ft.Page):
             if field["type"] == "bool":
                 sw = ft.Switch(
                     value=bool(current_val),
-                    active_color=Colors.INDIGO_500,
+                    active_color=T.ACCENT,
+                    active_track_color=T.ACCENT,
                 )
                 config_fields[key] = sw
                 row = ft.Row(
                     [
-                        ft.Text(label, size=14, color=Colors.BLUE_GREY_700),
+                        ft.Text(label, size=14, color=T.TEXT),
                         ft.Container(expand=True),
                         sw,
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
             elif field["type"] == "select":
-                dd = ft.Dropdown(
+                dd = T.dropdown(
                     value=str(current_val),
                     options=[ft.dropdown.Option(opt) for opt in field["options"]],
                     dense=True,
@@ -1616,28 +1627,26 @@ def _main(page: ft.Page):
                 config_fields[key] = dd
                 row = ft.Row(
                     [
-                        ft.Text(label, size=14, color=Colors.BLUE_GREY_700, expand=True),
+                        ft.Text(label, size=14, color=T.TEXT, expand=True),
                         dd,
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
             else:
                 pw = field["type"] == "password"
-                tf = ft.TextField(
+                tf = T.textfield(
                     value=str(current_val) if current_val is not None else "",
                     password=pw,
                     can_reveal_password=pw,
                     dense=True,
                     content_padding=ft.padding.Padding.symmetric(horizontal=10, vertical=8),
                     text_size=13,
-                    border_color=Colors.BLUE_GREY_300,
-                    focused_border_color=Colors.INDIGO_500,
                     width=280,
                 )
                 config_fields[key] = tf
                 row = ft.Row(
                     [
-                        ft.Text(label, size=14, color=Colors.BLUE_GREY_700, expand=True),
+                        ft.Text(label, size=14, color=T.TEXT, expand=True),
                         tf,
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1651,10 +1660,11 @@ def _main(page: ft.Page):
 
     config_dialog = ft.AlertDialog(
         modal=True,
+        bgcolor=T.BG_SECONDARY,
         title=ft.Row(
             [
-                ft.Icon(Icons.TUNE, color=Colors.INDIGO_500),
-                ft.Text("Configuración", size=18, weight=ft.FontWeight.BOLD),
+                ft.Icon(Icons.TUNE, color=T.ACCENT_HOVER),
+                ft.Text("Configuración", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
             ],
             spacing=8,
         ),
@@ -1673,9 +1683,9 @@ def _main(page: ft.Page):
                 icon=Icons.SAVE,
                 on_click=lambda e: save_config(),
                 style=ft.ButtonStyle(
-                    bgcolor=Colors.INDIGO_600,
-                    color=Colors.WHITE,
-                    shape=ft.RoundedRectangleBorder(radius=8),
+                    bgcolor=T.ACCENT,
+                    color=T.TEXT,
+                    shape=T.SHAPE,
                 ),
             ),
         ],
@@ -1706,10 +1716,10 @@ def _main(page: ft.Page):
             page.update()
 
             page.pop_dialog()
-            show_snackbar("Configuración guardada correctamente", Colors.GREEN_700)
+            show_snackbar("Configuración guardada correctamente", T.OK_DEEP)
             add_log("Configuración actualizada y guardada", "success")
         else:
-            show_snackbar("Error al guardar configuracion", Colors.RED_700)
+            show_snackbar("Error al guardar configuracion", T.DANGER_DEEP)
 
     def open_config_editor(e=None):
         for field in config_schema:
@@ -1732,17 +1742,17 @@ def _main(page: ft.Page):
         level = result.get("status", "info")
 
         if level == "success":
-            set_status(f"✓ {operation_name} completado", Colors.GREEN_500)
+            set_status(f"✓ {operation_name} completado", T.OK)
             add_log(f"{operation_name}: {result.get('message', 'OK')}", "success")
-            show_snackbar(f"{operation_name} completado exitosamente", Colors.GREEN_700)
+            show_snackbar(f"{operation_name} completado exitosamente", T.OK_DEEP)
         elif level == "warning":
-            set_status(f"⚠ {operation_name} - advertencia", Colors.AMBER_500)
+            set_status(f"⚠ {operation_name} - advertencia", T.WARN)
             add_log(f"{operation_name}: {result.get('message', 'Warning')}", "warning")
-            show_snackbar(result.get("message", "Advertencia"), Colors.AMBER_700)
+            show_snackbar(result.get("message", "Advertencia"), T.WARN_DEEP)
         else:
-            set_status(f"✗ {operation_name} fallo", Colors.RED_500)
+            set_status(f"✗ {operation_name} fallo", T.DANGER)
             add_log(f"{operation_name}: {result.get('message', str(result))}", "error")
-            show_snackbar(f"Error en {operation_name}: {result.get('message', '')}", Colors.RED_700)
+            show_snackbar(f"Error en {operation_name}: {result.get('message', '')}", T.DANGER_DEEP)
 
         logger.info(f"{operation_name}: {result}")
         nonlocal is_processing
@@ -1754,7 +1764,7 @@ def _main(page: ft.Page):
         def handler(e):
             nonlocal is_processing
             if is_processing:
-                show_snackbar("Ya hay una operacion en curso", Colors.AMBER_700)
+                show_snackbar("Ya hay una operacion en curso", T.WARN_DEEP)
                 return
 
             def execute():
@@ -1766,7 +1776,7 @@ def _main(page: ft.Page):
                     progress_dialog.content.value = ft.Column(
                         [
                             ft.ProgressRing(width=40, height=40),
-                            ft.Text("Procesando archivos y generando descripciones..."),
+                            ft.Text("Procesando archivos y generando descripciones...", color=T.TEXT_2),
                         ],
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=20,
@@ -1774,7 +1784,7 @@ def _main(page: ft.Page):
                     page.show_dialog(progress_dialog)
                 page.update()
 
-                set_status(f"Ejecutando: {name}...", Colors.INDIGO_500, loading=True)
+                set_status(f"Ejecutando: {name}...", T.ACCENT_HOVER, loading=True)
                 add_log(f"Iniciando: {name}...", "info")
 
                 def run_in_thread():
@@ -1838,23 +1848,24 @@ def _main(page: ft.Page):
 
     # AppBar
     app_bar = ft.AppBar(
-        leading=ft.Icon(Icons.CLOUD_SYNC, color=Colors.WHITE, size=28),
+        leading=ft.Icon(Icons.CLOUD_SYNC, color=T.TEXT, size=28),
         leading_width=56,
         title=ft.Column(
             [
-                ft.Text("InfoHub File Manager", size=18, weight=ft.FontWeight.BOLD, color=Colors.WHITE),
-                ft.Text("Sincronizacion con InfoHub", size=12, color=Colors.INDIGO_100),
+                ft.Text("InfoHub File Manager", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
+                ft.Text("Sincronizacion con InfoHub", size=12, color=T.TEXT_2),
             ],
             spacing=0,
         ),
         center_title=False,
-        bgcolor=Colors.INDIGO_700,
+        bgcolor=T.BG_PRIMARY,
+        elevation=0,
         actions=[
             *(
                 [
                     ft.IconButton(
                         icon=Icons.HOME,
-                        icon_color=Colors.WHITE,
+                        icon_color=T.TEXT,
                         tooltip="Volver al inicio de InfoHub",
                         on_click=lambda e: go_to_portal(),
                     )
@@ -1864,16 +1875,16 @@ def _main(page: ft.Page):
             ),
             ft.IconButton(
                 icon=Icons.REFRESH,
-                icon_color=Colors.WHITE,
+                icon_color=T.TEXT,
                 tooltip="Actualizar Estado",
                 on_click=lambda e: (
-                    set_status("Sistema listo", Colors.GREEN_500),
-                    show_snackbar("Estado actualizado", Colors.GREEN_700),
+                    set_status("Sistema listo", T.OK),
+                    show_snackbar("Estado actualizado", T.OK_DEEP),
                 ),
             ),
             ft.IconButton(
                 icon=Icons.SETTINGS,
-                icon_color=Colors.WHITE,
+                icon_color=T.TEXT,
                 tooltip="Configuración",
                 on_click=open_config_editor,
             ),
@@ -1888,35 +1899,35 @@ def _main(page: ft.Page):
                 "Carga Completa y Limpieza",
                 "Sincronizacion completa: subir, actualizar y eliminar documentos huerfanos",
                 on_full_upload,
-                Colors.CYAN_600,
+                T.TEAL,
             ),
             create_operation_card(
                 Icons.SYNC,
                 "Actualizar Espacios de Trabajo",
                 "Generar descripciones de imagenes con IA y subir archivos a workspaces",
                 on_sort_files,
-                Colors.INDIGO_500,
+                T.ACCENT_HOVER,
             ),
             create_operation_card(
                 Icons.CLEANING_SERVICES,
                 "Limpiar Carpetas",
                 "Eliminar workspaces vacios de InfoHub",
                 on_clean_folders,
-                Colors.AMBER_500,
+                T.WARN,
             ),
             create_operation_card(
                 Icons.SEARCH,
                 "Escanear Archivos",
                 "Previsualizar contenido de carpetas sin subir",
                 on_scan_files,
-                Colors.CYAN_600,
+                T.TEAL,
             ),
             create_operation_card(
                 Icons.IMAGE,
                 "Descripciones de Imagenes",
                 "Generar descripciones con IA para imagenes sin descripcion",
                 on_create_image_descriptions,
-                Colors.AMBER_600,
+                T.WARN,
             ),
         ],
         spacing=16,
@@ -1924,16 +1935,15 @@ def _main(page: ft.Page):
     )
 
     # Logs Panel
-    logs_panel = ft.Card(
-        content=ft.Container(
-            content=ft.Column(
+    logs_panel = T.card(
+            ft.Column(
                 [
                     ft.Row(
                         [
                             ft.Row(
                                 [
-                                    ft.Icon(Icons.TERMINAL, color=Colors.BLUE_GREY_600, size=18),
-                                    ft.Text("Registro de Operaciones", size=14, weight=ft.FontWeight.BOLD, color=Colors.BLUE_GREY_700),
+                                    ft.Icon(Icons.TERMINAL, color=T.TEXT_2, size=18),
+                                    ft.Text("Registro de Operaciones", size=14, weight=ft.FontWeight.BOLD, color=T.TEXT),
                                 ],
                                 spacing=8,
                             ),
@@ -1948,16 +1958,14 @@ def _main(page: ft.Page):
                     ),
                     ft.Container(
                         content=logs_list,
-                        border=ft.border.Border.all(1, Colors.BLUE_GREY_200),
-                        border_radius=8,
-                        bgcolor=Colors.WHITE,
+                        border=ft.border.Border.all(1, T.BORDER),
+                        border_radius=T.RADIUS,
+                        bgcolor=T.BG_INPUT,
                     ),
                 ],
                 spacing=10,
             ),
             padding=16,
-        ),
-        elevation=1,
     )
 
     # Main Layout
@@ -1984,12 +1992,12 @@ def _main(page: ft.Page):
                         [
                             ft.Row(
                                 [
-                                    ft.Text("Operaciones", size=18, weight=ft.FontWeight.BOLD, color=Colors.BLUE_GREY_800),
+                                    ft.Text("Operaciones", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
                                     ft.Container(expand=True),
                                     ft.Text(
                                         f"v1.0 | {datetime.now().strftime('%Y-%m-%d')}",
                                         size=12,
-                                        color=Colors.BLUE_GREY_400,
+                                        color=T.TEXT_3,
                                     ),
                                 ],
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -2015,7 +2023,7 @@ def _main(page: ft.Page):
             spacing=0,
             scroll=ft.ScrollMode.AUTO,
         ),
-        padding=24,
+        padding=ft.padding.Padding.symmetric(horizontal=24, vertical=20),
         expand=True,
     )
 

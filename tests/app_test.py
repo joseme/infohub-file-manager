@@ -800,6 +800,44 @@ class TestFileExistsInWorkspace:
 
 
 # ---------------------------------------------------------------------------
+# remote path helpers
+# ---------------------------------------------------------------------------
+
+
+class TestRemotePathHelpers:
+    def test_remote_name_and_stem_flat(self, manager):
+        assert manager._remote_name("Sub/informe.pdf") == "Sub__informe.pdf"
+        assert manager._remote_stem("Sub/informe.pdf") == "Sub__informe"
+        assert manager._remote_stem("informe.pdf") == "informe"
+        assert manager._remote_stem("SubA/x.pdf") != manager._remote_stem("SubB/x.pdf")
+        assert manager._rel_path(Path("/ws/Sub/informe.pdf"), Path("/ws")) == "Sub/informe.pdf"
+        # non-relative file falls back to file_path.name without raising
+        assert manager._rel_path(Path("/outside/file.pdf"), Path("/ws")) == "file.pdf"
+
+    def test_remote_base_matches_rejects_prefix_collision(self, manager):
+        assert manager._remote_base_matches(
+            "informe-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c", "informe.pdf"
+        ) is True
+        assert manager._remote_base_matches(
+            "informe_final-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c", "informe.pdf"
+        ) is False
+        assert manager._remote_base_matches(
+            "informe-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c", "informe_final.pdf"
+        ) is False
+        assert manager._remote_base_matches(
+            "backup-deadbeef-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c", "backup-deadbeef"
+        ) is True
+        assert manager._remote_base_matches("backup-deadbeef", "backup-deadbeef") is True
+        assert manager._remote_base_matches(
+            "backup-deadbeef-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c", "backup.pdf"
+        ) is False
+        assert manager._remote_base_matches(
+            "Daniel-Reis-Odoo-Development-Essentials.pdf-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c",
+            "Daniel Reis Odoo Development Essentials.pdf",
+        ) is True
+
+
+# ---------------------------------------------------------------------------
 # delete_documents
 # ---------------------------------------------------------------------------
 
