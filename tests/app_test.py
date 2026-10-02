@@ -114,6 +114,27 @@ def watched_dir(tmp_path: Path):
     return tmp_path
 
 
+@pytest.fixture
+def recursive_dir(tmp_path: Path):
+    """Own subdir with a nested workspace tree for recursive scan tests.
+
+    Structure:
+        base/Infohub_Tech/WorkspaceA/
+            doc1.pdf
+            doc3.pdf.image_description.txt
+            Sub/
+                doc3.pdf
+    """
+    base = tmp_path / "recursive_root"
+    base.mkdir()
+    ws = base / "Infohub_Tech" / "WorkspaceA"
+    (ws / "Sub").mkdir(parents=True)
+    (ws / "doc1.pdf").write_text("content")
+    (ws / "Sub" / "doc3.pdf").write_text("content")
+    (ws / "Sub" / "doc3.pdf.image_description.txt").write_text("desc")
+    return base
+
+
 # ---------------------------------------------------------------------------
 # Constructor
 # ---------------------------------------------------------------------------
@@ -248,6 +269,24 @@ class TestScanFiles:
         # total_files must NOT double-count WorkspaceA
         total_from_dict = sum(ws["file_count"] for ws in result["workspaces"].values())
         assert result["total_files"] == total_from_dict
+
+    def test_scan_recursive_lists_internal(self, manager, recursive_dir):
+        """Files nested in subfolders are returned with relative paths."""
+        manager.watched_root = str(recursive_dir)
+        result = manager.scan_files()
+
+        assert result["status"] == "success"
+        ws_files = result["workspaces"]["WorkspaceA"]["files"]
+        assert "Sub/doc3.pdf" in ws_files
+        assert "doc1.pdf" in ws_files
+
+    def test_scan_recursive_ignores_description(self, manager, recursive_dir):
+        """Nested .image_description.txt files stay excluded."""
+        manager.watched_root = str(recursive_dir)
+        result = manager.scan_files()
+
+        ws_files = result["workspaces"]["WorkspaceA"]["files"]
+        assert "Sub/doc3.pdf.image_description.txt" not in ws_files
 
 
 # ---------------------------------------------------------------------------

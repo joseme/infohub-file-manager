@@ -203,9 +203,9 @@ class InfoHubFileManager:
 
         for ws_name, ws_data in workspaces.items():
             ws_path = Path(ws_data["path"])
-            files = list(ws_path.iterdir())
+            files = ws_path.rglob("*")
             file_names = [
-                f.name for f in files
+                self._rel_path(f, ws_path) for f in files
                 if f.is_file()
                 and not f.name.endswith(".image_description")
                 and not f.name.endswith(".image_description.txt")
