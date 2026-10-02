@@ -1097,6 +1097,55 @@ class TestUploadFileToWorkspace:
         assert success is True
         assert msg == "uploaded"
 
+    def test_upload_uses_folder_qualified_name(self, manager, recursive_dir):
+        """Uploaded filename should be folder-qualified: Sub/informe.pdf → Sub__informe.pdf."""
+        ws_folder = recursive_dir / "Infohub_Tech" / "WorkspaceA"
+        file_path = ws_folder / "Sub" / "informe.pdf"
+        file_path.write_text("content")
+
+        mock_response = MagicMock(spec=requests.Response)
+        mock_response.status_code = 201
+
+        with patch.object(manager, "get_workspace_documents", return_value=self.MOCK_DOCS_EXISTS):
+            with patch("requests.post", return_value=mock_response) as mock_post:
+                success, skipped, msg = manager.upload_file_to_workspace(
+                    file_path, "WorkspaceA", workspace_folder=ws_folder
+                )
+
+        assert success is True
+        assert skipped is False
+        posted_name = mock_post.call_args.kwargs["files"]["file"][0]
+        assert posted_name == "Sub__informe.pdf"
+
+    def test_upload_same_stem_two_subfolders_both_upload(self, manager, recursive_dir):
+        """Same stem in two subfolders must both upload with distinct remote names."""
+        ws_folder = recursive_dir / "Infohub_Tech" / "WorkspaceA"
+        (ws_folder / "SubA").mkdir()
+        (ws_folder / "SubB").mkdir()
+        file_a = ws_folder / "SubA" / "informe.pdf"
+        file_b = ws_folder / "SubB" / "informe.pdf"
+        file_a.write_text("a")
+        file_b.write_text("b")
+
+        mock_response = MagicMock(spec=requests.Response)
+        mock_response.status_code = 201
+
+        with patch.object(manager, "get_workspace_documents", return_value=self.MOCK_DOCS_EXISTS):
+            with patch("requests.post", return_value=mock_response) as mock_post:
+                result_a = manager.upload_file_to_workspace(
+                    file_a, "WorkspaceA", workspace_folder=ws_folder
+                )
+                result_b = manager.upload_file_to_workspace(
+                    file_b, "WorkspaceA", workspace_folder=ws_folder
+                )
+
+        assert result_a == (True, False, "uploaded")
+        assert result_b == (True, False, "uploaded")
+        posted_names = {
+            c.kwargs["files"]["file"][0] for c in mock_post.call_args_list
+        }
+        assert posted_names == {"SubA__informe.pdf", "SubB__informe.pdf"}
+
 
 # ---------------------------------------------------------------------------
 # sort_files

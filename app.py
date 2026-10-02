@@ -529,14 +529,17 @@ class InfoHubFileManager:
             return False
 
     def file_exists_in_workspace(
-        self, file_path: Path, workspace_name: str, docs: dict = None
+        self, file_path: Path, workspace_name: str, docs: dict = None,
+        workspace_folder=None,
     ) -> bool:
-        """Check if file already exists in workspace"""
-        # Must handle UUID-format docpaths: report.pdf → docpath report.abc123.json
-        # or report-uuid.json, so base_name = "report.abc123" / "report-uuid"
-        # and we need to match stem "report"
+        """Check if file already exists in workspace.
+
+        Matches against the folder-qualified remote stem (Sub/informe.pdf →
+        Sub__informe) so same-stem files in different subfolders don't collide.
+        """
+        rel = self._rel_path(file_path, workspace_folder or file_path.parent)
         return any(
-            self._base_name_matches(base, file_path.stem)
+            self._base_name_matches(base, self._remote_stem(rel))
             for base in self._base_names_for(workspace_name, docs)
         )
 
@@ -574,7 +577,8 @@ class InfoHubFileManager:
             return (False, 0, [str(e)])
 
     def upload_file_to_workspace(
-        self, file_path: Path, workspace_name: str, skip_if_exists: bool = True
+        self, file_path: Path, workspace_name: str,
+        workspace_folder=None, skip_if_exists: bool = True,
     ) -> tuple:
         """Upload a single file to AnythingLLM workspace
 
@@ -582,6 +586,11 @@ class InfoHubFileManager:
             tuple: (success: bool, skipped: bool, message: str)
         """
         try:
+            # Folder-qualified remote identity so same-stem files in different
+            # subfolders don't collide (Sub/informe.pdf → Sub__informe.pdf).
+            rel = self._rel_path(file_path, workspace_folder or file_path.parent)
+            remote = self._remote_name(rel)
+
             # Auto-create workspace if missing + check file existence
             docs = self.get_workspace_documents(workspace_name)
             if not docs.get("exists", True):
@@ -589,12 +598,14 @@ class InfoHubFileManager:
                 docs = self.get_workspace_documents(workspace_name)
 
             # Also guard against uploading twice in the same operation
-            cache_key = f"{workspace_name}:{file_path.stem}"
+            cache_key = f"{workspace_name}:{remote}"
             if cache_key in self._uploaded_docpaths:
                 logger.info(f"Skipped {file_path.name} - already uploaded in this run")
                 return (False, True, "already exists")
 
-            if skip_if_exists and self.file_exists_in_workspace(file_path, workspace_name, docs):
+            if skip_if_exists and self.file_exists_in_workspace(
+                file_path, workspace_name, docs, workspace_folder
+            ):
                 logger.info(f"Skipped {file_path.name} - already in {workspace_name}")
                 return (False, True, "already exists")
 
@@ -606,7 +617,7 @@ class InfoHubFileManager:
             }
 
             with open(file_path, "rb") as f:
-                files = {"file": (file_path.name, f)}
+                files = {"file": (remote, f)}
                 response = requests.post(url, headers=headers, files=files, timeout=300)
 
             if response.status_code in (200, 201):
