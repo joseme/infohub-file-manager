@@ -1459,6 +1459,41 @@ class TestFullUploadAndClean:
         assert result["deleted"] == 1
         assert "doc_orphan.abc.json" in delete_results.get("called_with", [])
 
+    def test_simulation_lists_and_changes_nothing(self, manager, watched_dir):
+        """Simular: los mismos huérfanos que la limpieza real, sin borrar, subir, crear ni embeber."""
+        manager.watched_root = str(watched_dir)
+
+        def mock_get_docs(ws_name):
+            if ws_name == "WorkspaceA":
+                return {
+                    "base_names": {"doc1", "doc_orphan"},
+                    "doc_names": {"doc1": "workspacea/doc1.uuid.json", "doc_orphan": "workspacea/doc_orphan.abc.json"},
+                    "raw_docs": [], "exists": True,
+                }
+            if ws_name == "TeamSpace":
+                return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": False}
+            return {"base_names": set(), "doc_names": {}, "raw_docs": [], "exists": True}
+
+        with patch.object(manager, "get_workspace_documents", side_effect=mock_get_docs), \
+             patch.object(manager, "delete_documents") as mock_delete, \
+             patch.object(manager, "upload_file_to_workspace") as mock_upload, \
+             patch.object(manager, "create_workspace") as mock_create, \
+             patch.object(manager, "_update_embeddings") as mock_embed:
+            result = manager.simulate_clean()
+
+        mock_delete.assert_not_called()
+        mock_upload.assert_not_called()
+        mock_create.assert_not_called()
+        mock_embed.assert_not_called()
+        assert result["status"] == "success"
+        assert result["would_delete"] == 1
+        plan = result["simulation"]
+        assert plan["WorkspaceA"]["huerfanos"] == ["workspacea/doc_orphan.abc.json"]
+        assert "doc2.txt" in plan["WorkspaceA"]["a_subir"]
+        assert "doc1.pdf" not in plan["WorkspaceA"]["a_subir"]
+        assert plan["TeamSpace"]["nuevo"] is True and plan["TeamSpace"]["a_subir"] == ["notes.md"]
+        assert result["message"].startswith("Simulación, no se cambió nada: se borrarían 1 documentos huérfanos")
+
     def test_protected_workspace_is_neither_synced_nor_cleaned(self, manager, tmp_path):
         """tributacion y odoo17 se cargan aparte: el file manager no los toca aunque
         haya una carpeta local con ese nombre y documentos remotos que no coinciden."""

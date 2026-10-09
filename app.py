@@ -865,8 +865,17 @@ class InfoHubFileManager:
         """Clean empty folders in InfoHub"""
         return {"status": "success", "message": "Empty folders cleaned"}
 
-    def full_upload_and_clean(self) -> dict:
-        """Full synchronization: upload new/updated files, delete removed ones"""
+    def simulate_clean(self) -> dict:
+        """Simulación de la carga completa: qué se borraría y qué se subiría,
+        sin cambiar nada en InfoHub."""
+        return self.full_upload_and_clean(simular=True)
+
+    def full_upload_and_clean(self, simular: bool = False) -> dict:
+        """Full synchronization: upload new/updated files, delete removed ones.
+
+        Con simular=True decide igual qué es huérfano y qué falta subir, pero no
+        borra, no sube, no crea workspaces ni actualiza embeddings.
+        """
         try:
             # Clear operation caches so each run starts fresh
             self._base_name_cache.clear()
@@ -889,6 +898,7 @@ class InfoHubFileManager:
             deleted = 0
             delete_errors = []
             workspaces_processed = 0
+            plan = {}
 
             # Deduplicate workspaces by name across parent dirs
             workspaces_by_name = {}
@@ -933,6 +943,13 @@ class InfoHubFileManager:
                 # --- Step 2: Find and delete orphaned remote documents ---
                 docs_info = self.get_workspace_documents(workspace_name)
                 if not docs_info.get("exists", False):
+                    if simular:
+                        plan[workspace_name] = {
+                            "nuevo": True,
+                            "huerfanos": [],
+                            "a_subir": sorted(self._rel_path(f, workspace_folder) for f in archivos),
+                        }
+                        continue
                     self.create_workspace(workspace_name)
                     docs_info = self.get_workspace_documents(workspace_name)
                 remote_base_names = docs_info["base_names"]
@@ -951,13 +968,29 @@ class InfoHubFileManager:
                         )
                     ]
 
+                if simular:
+                    a_subir = sorted(
+                        self._rel_path(f, workspace_folder) for f in archivos
+                        if not self.file_exists_in_workspace(f, workspace_name, docs_info, workspace_folder)
+                    )
+                    plan[workspace_name] = {
+                        "nuevo": False,
+                        "huerfanos": sorted(orphaned),
+                        "a_subir": a_subir,
+                        "sin_lista_local": collection_failed,
+                    }
+                    for doc_name in orphaned:
+                        logger.info(f"[simulación] Se borraría de '{workspace_name}': {doc_name}")
+                    continue
+
                 if orphaned:
                     logger.info(
                         f"Orphaned documents in '{workspace_name}': {orphaned}"
                     )
                     success, count, errs = self.delete_documents(orphaned)
+                    # Cuenta lo que de verdad se borró, aunque el lote fallara a medias.
+                    deleted += count
                     if success:
-                        deleted += count
                         for doc_name in orphaned:
                             logger.info(f"Deleted orphaned document: {doc_name}")
                     else:
@@ -976,6 +1009,27 @@ class InfoHubFileManager:
 
                 # --- Step 4: Update embeddings ---
                 self._update_embeddings(workspace_name)
+
+            if simular:
+                borrarian = sum(len(p["huerfanos"]) for p in plan.values())
+                subirian = sum(len(p["a_subir"]) for p in plan.values())
+                con_huerfanos = sum(1 for p in plan.values() if p["huerfanos"])
+                message = (
+                    f"Simulación, no se cambió nada: se borrarían {borrarian} documentos huérfanos "
+                    f"en {con_huerfanos} workspaces y se subirían {subirian} archivos "
+                    f"({workspaces_processed} workspaces revisados)."
+                )
+                if protegidos:
+                    message += f" Protegidos, sin tocar: {', '.join(protegidos)}."
+                return {
+                    "status": "success",
+                    "message": message,
+                    "simulation": plan,
+                    "would_delete": borrarian,
+                    "would_upload": subirian,
+                    "workspaces_processed": workspaces_processed,
+                    "protected": protegidos,
+                }
 
             result_msg = (
                 f"{workspaces_processed} workspaces procesados, {uploaded} subidos, "
@@ -1673,6 +1727,7 @@ def _main(page: ft.Page):
     def show_workspaces(result):
         if result.get("status") != "success":
             return
+        explorer_dialog.title = ft.Text("Workspaces Encontrados", color=T.TEXT)
 
         workspaces = result.get("workspaces", {})
         if not workspaces:
@@ -1749,6 +1804,48 @@ def _main(page: ft.Page):
                 height=400,
             )
 
+        page.show_dialog(explorer_dialog)
+
+    def show_simulation(result):
+        """Qué haría la carga completa: huérfanos que se borrarían y archivos que se subirían."""
+        if result.get("status") != "success":
+            return
+        explorer_dialog.title = ft.Text("Simulación de limpieza", color=T.TEXT)
+
+        def lista(titulo, nombres, color, limite):
+            if not nombres:
+                return ft.Text(f"{titulo}: ninguno", size=12, color=T.TEXT_3, italic=True)
+            filas = [ft.Text(f"{titulo} ({len(nombres)})", size=12, weight=ft.FontWeight.BOLD, color=color)]
+            filas += [ft.Text(n, size=11, color=T.TEXT_2, selectable=True) for n in nombres[:limite]]
+            if len(nombres) > limite:
+                filas.append(ft.Text(f"+{len(nombres) - limite} más (lista completa en el log)", size=11, color=T.TEXT_3))
+            return ft.Column(filas, spacing=2)
+
+        items = [ft.Text(result.get("message", ""), size=13, color=T.TEXT)]
+        for name, data in result.get("simulation", {}).items():
+            encabezado = name + (" · se crearía" if data.get("nuevo") else "")
+            items.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Row(
+                                [ft.Icon(Icons.FOLDER, color=T.ACCENT_HOVER, size=20),
+                                 ft.Text(encabezado, size=14, weight=ft.FontWeight.BOLD, color=T.TEXT)],
+                                spacing=8,
+                            ),
+                            lista("Se borrarían", data.get("huerfanos", []), T.WARN, 20),
+                            lista("Se subirían", data.get("a_subir", []), T.TEAL, 10),
+                        ],
+                        spacing=6,
+                    ),
+                    padding=12,
+                    border_radius=T.RADIUS,
+                    bgcolor=T.BG_INPUT,
+                    border=ft.border.Border.all(1, T.BORDER),
+                    margin=ft.margin.Margin.only(top=8),
+                )
+            )
+        explorer_dialog.content = ft.Column(items, scroll=ft.ScrollMode.AUTO, spacing=0, height=400)
         page.show_dialog(explorer_dialog)
 
     # --- Config Editor Dialog ---
@@ -1959,6 +2056,8 @@ def _main(page: ft.Page):
                             update_stats(result)
                             if name == "Escanear Archivos":
                                 show_workspaces(result)
+                            elif name == "Simular Limpieza":
+                                show_simulation(result)
                     except Exception as ex:
                         log_operation(name, {"status": "error", "message": str(ex)}, show_progress)
 
@@ -1989,6 +2088,8 @@ def _main(page: ft.Page):
     )
 
     on_scan_files = wrap_operation("Escanear Archivos", manager.scan_files)
+
+    on_simulate_clean = wrap_operation("Simular Limpieza", manager.simulate_clean)
 
     on_full_upload = wrap_operation(
         "Carga Completa y Limpieza",
@@ -2064,6 +2165,13 @@ def _main(page: ft.Page):
                 "Sincronizacion completa: subir, actualizar y eliminar documentos huerfanos",
                 on_full_upload,
                 T.TEAL,
+            ),
+            create_operation_card(
+                Icons.FIND_IN_PAGE,
+                "Simular Limpieza",
+                "Ver qué borraría y qué subiría la carga completa, sin cambiar nada",
+                on_simulate_clean,
+                T.ACCENT_HOVER,
             ),
             create_operation_card(
                 Icons.SYNC,
