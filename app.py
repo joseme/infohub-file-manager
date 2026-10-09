@@ -44,6 +44,12 @@ SPREADSHEET_PER_SHEET_EXTS = {".xlsx"}
 EMBEDDINGS_MAX_RETRIES = 3
 EMBEDDINGS_RETRY_STATUS_CODES = {502, 503, 504}
 EMBEDDINGS_RETRY_BACKOFF_SECONDS = 5
+# Lotes chicos: cada pedido debe terminar antes del corte del proxy (60 s en NPM).
+EMBEDDINGS_BATCH_SIZE = 10
+# Tras un 502/504 o un tiempo agotado, InfoHub sigue procesando: se espera a que
+# los documentos aparezcan registrados antes de reenviar (reenviar duplica filas).
+EMBEDDINGS_POLL_SECONDS = 15
+EMBEDDINGS_WAIT_SECONDS = 300
 
 
 def _query_param(page: ft.Page, key: str) -> str:
@@ -474,6 +480,11 @@ class InfoHubFileManager:
 
         After uploading documents, this must be called so the vector DB
         is updated and queries can find the documents.
+
+        Sends the pending documents in batches of EMBEDDINGS_BATCH_SIZE so each
+        request ends before the reverse proxy's timeout. Never re-sends a
+        document that is already registered: re-adding creates duplicate rows
+        in workspace_documents.
         """
         try:
             slug = self.get_workspace_slug(workspace_name)
@@ -482,63 +493,104 @@ class InfoHubFileManager:
                 logger.warning(f"Cannot update embeddings: workspace '{workspace_name}' not found")
                 return False
 
-            # Collect all server-side document paths from the workspace
-            docpaths = [
-                doc["docpath"] for doc in docs.get("raw_docs", [])
-                if isinstance(doc, dict) and doc.get("docpath")
-            ]
             # Uploads on this InfoHub instance are not registered in the
-            # workspace listing until processed — merge in the documents area.
-            # Solo se envían los NO registrados: re-enviar existentes crea
-            # filas duplicadas en workspace_documents.
-            existing = set(docpaths)
-            new_paths = [
+            # workspace listing until processed — take them from the
+            # documents area and keep only the unregistered ones.
+            registered = self._registered_docpaths(docs)
+            pending = [
                 p for p in self._get_documents_area_docpaths(slug)
-                if p not in existing
+                if p not in registered
             ]
-            if not new_paths:
+            if not pending:
                 logger.info(f"No new documents to embed in workspace '{workspace_name}'")
                 return True
-            docpaths = new_paths
 
-            url = f"{self.base_url}/api/v1/workspace/{slug}/update-embeddings"
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "accept": "application/json",
-            }
-            payload = {"adds": docpaths, "deletes": []}
-
-            for attempt in range(EMBEDDINGS_MAX_RETRIES):
-                try:
-                    response = requests.post(url, headers=headers, json=payload, timeout=300)
-                except requests.RequestException as e:
-                    if attempt < EMBEDDINGS_MAX_RETRIES - 1:
-                        logger.warning(
-                            f"Embeddings request failed (attempt {attempt + 1}/{EMBEDDINGS_MAX_RETRIES}): {e}; retrying"
-                        )
-                        time.sleep(EMBEDDINGS_RETRY_BACKOFF_SECONDS * (attempt + 1))
-                        continue
-                    logger.error(f"Error updating embeddings for '{workspace_name}': {e}")
+            for i in range(0, len(pending), EMBEDDINGS_BATCH_SIZE):
+                batch = pending[i:i + EMBEDDINGS_BATCH_SIZE]
+                if not self._embed_batch(workspace_name, slug, batch):
                     return False
-                if response.status_code == 200:
-                    logger.info(f"Embeddings updated for '{workspace_name}' ({len(docpaths)} docs)")
-                    return True
-                if (
-                    response.status_code in EMBEDDINGS_RETRY_STATUS_CODES
-                    and attempt < EMBEDDINGS_MAX_RETRIES - 1
-                ):
-                    logger.warning(
-                        f"Embeddings update returned {response.status_code} "
-                        f"(attempt {attempt + 1}/{EMBEDDINGS_MAX_RETRIES}); retrying"
-                    )
-                    time.sleep(EMBEDDINGS_RETRY_BACKOFF_SECONDS * (attempt + 1))
-                    continue
-                logger.warning(f"Failed to update embeddings for '{workspace_name}': {response.status_code} - {response.text}")
-                return False
+            logger.info(f"Embeddings updated for '{workspace_name}' ({len(pending)} docs)")
+            return True
         except Exception as e:
             logger.error(f"Error updating embeddings for '{workspace_name}': {e}")
             return False
+
+    @staticmethod
+    def _registered_docpaths(docs: dict) -> set:
+        return {
+            doc["docpath"] for doc in docs.get("raw_docs", [])
+            if isinstance(doc, dict) and doc.get("docpath")
+        }
+
+    def _still_unregistered(self, workspace_name: str, batch: list) -> list:
+        registered = self._registered_docpaths(self.get_workspace_documents(workspace_name))
+        return [p for p in batch if p not in registered]
+
+    def _wait_until_registered(self, workspace_name: str, batch: list) -> list:
+        """After a gateway timeout InfoHub keeps processing the request: wait
+        for the batch to show up in the workspace instead of re-sending it.
+        Returns the docpaths still unregistered when the wait is over."""
+        pending = batch
+        waited = 0
+        while pending and waited < EMBEDDINGS_WAIT_SECONDS:
+            time.sleep(EMBEDDINGS_POLL_SECONDS)
+            waited += EMBEDDINGS_POLL_SECONDS
+            pending = self._still_unregistered(workspace_name, pending)
+        return pending
+
+    def _embed_batch(self, workspace_name: str, slug: str, batch: list) -> bool:
+        url = f"{self.base_url}/api/v1/workspace/{slug}/update-embeddings"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "accept": "application/json",
+        }
+        for attempt in range(EMBEDDINGS_MAX_RETRIES):
+            # Did the request reach InfoHub, so it may still be processing it?
+            maybe_processing = False
+            try:
+                response = requests.post(
+                    url, headers=headers, json={"adds": batch, "deletes": []}, timeout=300
+                )
+            except requests.ReadTimeout as e:
+                maybe_processing = True
+                logger.warning(
+                    f"Embeddings request timed out (attempt {attempt + 1}/{EMBEDDINGS_MAX_RETRIES}): {e}"
+                )
+            except requests.RequestException as e:
+                logger.warning(
+                    f"Embeddings request failed (attempt {attempt + 1}/{EMBEDDINGS_MAX_RETRIES}): {e}"
+                )
+            else:
+                if response.status_code == 200:
+                    return True
+                if response.status_code not in EMBEDDINGS_RETRY_STATUS_CODES:
+                    logger.warning(
+                        f"Failed to update embeddings for '{workspace_name}': "
+                        f"{response.status_code} - {response.text}"
+                    )
+                    return False
+                # 502/504 come from the proxy: InfoHub may still be working.
+                maybe_processing = response.status_code in (502, 504)
+                logger.warning(
+                    f"Embeddings update returned {response.status_code} "
+                    f"(attempt {attempt + 1}/{EMBEDDINGS_MAX_RETRIES})"
+                )
+
+            if attempt == EMBEDDINGS_MAX_RETRIES - 1:
+                break
+            if maybe_processing:
+                batch = self._wait_until_registered(workspace_name, batch)
+            else:
+                time.sleep(EMBEDDINGS_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                batch = self._still_unregistered(workspace_name, batch)
+            if not batch:
+                logger.info(f"Embeddings finished on the server for '{workspace_name}'")
+                return True
+            logger.info(f"Retrying {len(batch)} unregistered documents for '{workspace_name}'")
+
+        logger.error(f"Error updating embeddings for '{workspace_name}': {len(batch)} documents left")
+        return False
 
     def file_exists_in_workspace(
         self, file_path: Path, workspace_name: str, docs: dict = None,

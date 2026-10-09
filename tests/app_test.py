@@ -578,7 +578,8 @@ class TestUpdateEmbeddings:
 
         assert result is True
         assert mock_post.call_count == 2
-        mock_sleep.assert_called_once()
+        # Tras el 504 espera a ver si InfoHub lo registra (varias consultas) antes de reenviar.
+        assert mock_sleep.call_count >= 1
 
     def test_update_retries_exhausted_on_504(self, manager):
         """Persistent 504 → False after max retries."""
@@ -733,6 +734,57 @@ class TestUpdateEmbeddings:
         assert result is True
         call_kwargs = mock_post.call_args.kwargs
         assert call_kwargs["json"]["adds"] == ["blawd/doc2.json"]
+
+
+    def test_504_then_registered_while_waiting_is_not_resent(self, manager):
+        """El proxy corta con 504 pero InfoHub termina: no se reenvía (reenviar duplica filas)."""
+        mock_504 = MagicMock(spec=requests.Response)
+        mock_504.status_code = 504
+        mock_504.text = "Gateway Time-out"
+        antes = {"exists": True, "raw_docs": [{"docpath": "ws/doc1.json"}]}
+        despues = {"exists": True, "raw_docs": [{"docpath": "ws/doc1.json"}, {"docpath": "ws/doc2.json"}]}
+
+        with patch.object(manager, "get_workspace_documents", side_effect=[antes, antes, despues]):
+            with patch.object(manager, "_get_documents_area_docpaths", return_value=["ws/doc1.json", "ws/doc2.json"]):
+                with patch("requests.post", return_value=mock_504) as mock_post:
+                    with patch("time.sleep"):
+                        result = manager._update_embeddings("ws")
+
+        assert result is True
+        assert mock_post.call_count == 1
+
+    def test_read_timeout_resends_only_the_pending_ones(self, manager):
+        """Tiempo agotado con el lote a medio procesar: se reenvían solo los que faltan."""
+        mock_200 = MagicMock(spec=requests.Response)
+        mock_200.status_code = 200
+        vacio = {"exists": True, "raw_docs": []}
+        parcial = {"exists": True, "raw_docs": [{"docpath": "ws/a.json"}]}
+        # 1 lectura inicial + 20 consultas durante la espera (5 min / 15 s), siempre a medias.
+        lecturas = [vacio] + [parcial] * 20
+
+        with patch.object(manager, "get_workspace_documents", side_effect=lecturas):
+            with patch.object(manager, "_get_documents_area_docpaths", return_value=["ws/a.json", "ws/b.json"]):
+                with patch("requests.post", side_effect=[requests.ReadTimeout("lento"), mock_200]) as mock_post:
+                    with patch("time.sleep"):
+                        result = manager._update_embeddings("ws")
+
+        assert result is True
+        assert mock_post.call_args_list[0].kwargs["json"]["adds"] == ["ws/a.json", "ws/b.json"]
+        assert mock_post.call_args_list[1].kwargs["json"]["adds"] == ["ws/b.json"]
+
+    def test_sends_in_batches_of_ten(self, manager):
+        mock_200 = MagicMock(spec=requests.Response)
+        mock_200.status_code = 200
+        area = [f"ws/doc{i}.json" for i in range(25)]
+
+        with patch.object(manager, "get_workspace_documents", return_value={"exists": True, "raw_docs": []}):
+            with patch.object(manager, "_get_documents_area_docpaths", return_value=area):
+                with patch("requests.post", return_value=mock_200) as mock_post:
+                    result = manager._update_embeddings("ws")
+
+        assert result is True
+        assert [len(c.kwargs["json"]["adds"]) for c in mock_post.call_args_list] == [10, 10, 5]
+        assert [p for c in mock_post.call_args_list for p in c.kwargs["json"]["adds"]] == area
 
 
 # ---------------------------------------------------------------------------
