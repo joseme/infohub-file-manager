@@ -46,6 +46,9 @@ EMBEDDINGS_RETRY_STATUS_CODES = {502, 503, 504}
 EMBEDDINGS_RETRY_BACKOFF_SECONDS = 5
 # Lotes chicos: cada pedido debe terminar antes del corte del proxy (60 s en NPM).
 EMBEDDINGS_BATCH_SIZE = 10
+# Borrado: en producción LanceDB tarda varios segundos por documento.
+DELETE_BATCH_SIZE = 20
+DELETE_TIMEOUT_SECONDS = 120
 # Tras un 502/504 o un tiempo agotado, InfoHub sigue procesando: se espera a que
 # los documentos aparezcan registrados antes de reenviar (reenviar duplica filas).
 EMBEDDINGS_POLL_SECONDS = 15
@@ -276,7 +279,8 @@ class InfoHubFileManager:
         Returns:
             dict with:
                 - "base_names": set of base filenames (for existence checks)
-                - "doc_names": dict mapping base_name -> full_doc_name (for deletion)
+                - "doc_names": dict mapping base_name -> docpath ("carpeta/archivo.json"),
+                  que es lo que espera /v1/system/remove-documents
                 - "raw_docs": list of raw document dicts
         """
         try:
@@ -319,7 +323,9 @@ class InfoHubFileManager:
                             filename = docpath.split("/")[-1]
                             base_name = filename.replace(".json", "")
                             base_names.add(base_name)
-                            doc_names[base_name] = filename
+                            # remove-documents necesita la ruta con carpeta: con el
+                            # nombre solo responde 200 sin borrar nada.
+                            doc_names[base_name] = docpath
 
                 return {
                     "base_names": base_names,
@@ -611,7 +617,12 @@ class InfoHubFileManager:
         """Delete documents from AnythingLLM system.
 
         Args:
-            doc_names: List of full document names (e.g. ["report.uuid.json"])
+            doc_names: docpaths con carpeta (e.g. ["ws/report.pdf-<uuid>.json"]).
+
+        Borra en lotes de DELETE_BATCH_SIZE: en producción LanceDB tarda varios
+        segundos por documento. Si un lote se corta por tiempo (o el proxy
+        responde 502/504), comprueba qué sigue existiendo y solo cuenta como
+        error lo que quedó.
 
         Returns:
             tuple: (success: bool, deleted_count: int, errors: list)
@@ -619,26 +630,56 @@ class InfoHubFileManager:
         if not doc_names:
             return (True, 0, [])
 
-        try:
-            url = f"{self.base_url}/api/v1/system/remove-documents"
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "accept": "application/json",
-            }
+        url = f"{self.base_url}/api/v1/system/remove-documents"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "accept": "application/json",
+        }
+        deleted = 0
+        errors = []
+        logger.info(f"Deleting {len(doc_names)} documents: {doc_names}")
+        for i in range(0, len(doc_names), DELETE_BATCH_SIZE):
+            batch = doc_names[i:i + DELETE_BATCH_SIZE]
+            try:
+                response = requests.delete(
+                    url, headers=headers, json={"names": batch}, timeout=DELETE_TIMEOUT_SECONDS
+                )
+            except requests.ReadTimeout:
+                response = None
+            except Exception as e:
+                logger.error(f"Error deleting documents: {e}")
+                errors.append(str(e))
+                continue
 
-            logger.info(f"Deleting {len(doc_names)} documents: {doc_names}")
-            response = requests.delete(url, headers=headers, json={"names": doc_names}, timeout=30)
-
-            if response.status_code in (200, 201, 204):
-                logger.info(f"Successfully deleted {len(doc_names)} documents")
-                return (True, len(doc_names), [])
-            else:
+            if response is not None and response.status_code in (200, 201, 204):
+                deleted += len(batch)
+                continue
+            if response is not None and response.status_code not in (502, 504):
                 logger.warning(f"Failed to delete documents: {response.status_code} - {response.text}")
-                return (False, 0, [f"HTTP {response.status_code}: {response.text}"])
-        except Exception as e:
-            logger.error(f"Error deleting documents: {e}")
-            return (False, 0, [str(e)])
+                errors.append(f"HTTP {response.status_code}: {response.text}")
+                continue
+
+            # Corte por tiempo: InfoHub puede haber borrado todo o parte.
+            remaining = self._still_in_documents_area(batch)
+            deleted += len(batch) - len(remaining)
+            for name in remaining:
+                errors.append(f"No se pudo confirmar el borrado de {name}")
+            logger.warning(
+                f"Delete batch timed out: {len(batch) - len(remaining)} borrados, {len(remaining)} pendientes"
+            )
+
+        if errors:
+            return (False, deleted, errors)
+        logger.info(f"Successfully deleted {deleted} documents")
+        return (True, deleted, [])
+
+    def _still_in_documents_area(self, docpaths: list) -> list:
+        """Docpaths que todavía están en el área de documentos de InfoHub."""
+        present = set()
+        for folder in {p.split("/")[0] for p in docpaths}:
+            present.update(self._get_documents_area_docpaths(folder))
+        return [p for p in docpaths if p in present]
 
     def upload_file_to_workspace(
         self, file_path: Path, workspace_name: str,

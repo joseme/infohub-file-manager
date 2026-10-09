@@ -966,8 +966,46 @@ class TestDeleteDocuments:
                 "accept": "application/json",
             },
             json={"names": ["doc1.uuid.json", "doc2.abc.json"]},
-            timeout=30,
+            timeout=120,
         )
+
+    def test_delete_in_batches_of_twenty(self, manager):
+        mock_response = MagicMock(spec=requests.Response)
+        mock_response.status_code = 200
+        names = [f"ws/doc{i}.json" for i in range(45)]
+        with patch("requests.delete", return_value=mock_response) as mock_delete:
+            success, count, errors = manager.delete_documents(names)
+        assert (success, count, errors) == (True, 45, [])
+        assert [len(c.kwargs["json"]["names"]) for c in mock_delete.call_args_list] == [20, 20, 5]
+
+    def test_delete_timeout_counts_what_was_really_deleted(self, manager):
+        """Un 504 del proxy: se comprueba qué sigue en el área de documentos."""
+        mock_504 = MagicMock(spec=requests.Response)
+        mock_504.status_code = 504
+        mock_504.text = "Gateway Time-out"
+        with patch("requests.delete", return_value=mock_504):
+            with patch.object(manager, "_get_documents_area_docpaths", return_value=["ws/b.json"]):
+                success, count, errors = manager.delete_documents(["ws/a.json", "ws/b.json"])
+        assert success is False
+        assert count == 1
+        assert errors == ["No se pudo confirmar el borrado de ws/b.json"]
+
+    def test_delete_read_timeout_all_done(self, manager):
+        with patch("requests.delete", side_effect=requests.ReadTimeout("lento")):
+            with patch.object(manager, "_get_documents_area_docpaths", return_value=[]):
+                success, count, errors = manager.delete_documents(["ws/a.json", "ws/b.json"])
+        assert (success, count, errors) == (True, 2, [])
+
+    def test_orphans_are_deleted_with_their_folder(self, manager):
+        """remove-documents necesita 'carpeta/archivo.json': con el nombre solo no borra nada."""
+        response = MagicMock(spec=requests.Response)
+        response.status_code = 200
+        response.json.return_value = {"workspace": [{"slug": "ws", "documents": [
+            {"docpath": "ws/informe.pdf-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c.json"},
+        ]}]}
+        with patch("requests.get", return_value=response):
+            docs = manager.get_workspace_documents("ws")
+        assert list(docs["doc_names"].values()) == ["ws/informe.pdf-d61da6b2-09ff-43dd-9c8c-6acb4bc58b6c.json"]
 
     def test_delete_empty_list(self, manager):
         """Empty doc list should succeed immediately without API call."""
