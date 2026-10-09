@@ -25,6 +25,8 @@ DEFAULTS = {
     "ollama_model": "llava:latest",
     "image_description_active": True,
     "watched_folders_root": "",
+    # Se administran fuera del file manager (piloto de Infohub Chat).
+    "protected_workspaces": "tributacion, odoo17",
 }
 
 FIELDS_SCHEMA = [
@@ -36,6 +38,7 @@ FIELDS_SCHEMA = [
     {"key": "ollama_model", "label": "Modelo Ollama", "type": "text"},
     {"key": "image_description_active", "label": "Descripciones de Imagenes", "type": "bool"},
     {"key": "watched_folders_root", "label": "Carpeta Raiz Observada", "type": "text"},
+    {"key": "protected_workspaces", "label": "Workspaces protegidos (separados por coma)", "type": "text"},
     {"key": "log_level", "label": "Nivel de Log", "type": "select", "options": ["DEBUG", "INFO", "WARNING", "ERROR"]},
     {"key": "log_file", "label": "Archivo de Log", "type": "text"},
 ]

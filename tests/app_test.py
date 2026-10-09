@@ -1459,6 +1459,42 @@ class TestFullUploadAndClean:
         assert result["deleted"] == 1
         assert "doc_orphan.abc.json" in delete_results.get("called_with", [])
 
+    def test_protected_workspace_is_neither_synced_nor_cleaned(self, manager, tmp_path):
+        """tributacion y odoo17 se cargan aparte: el file manager no los toca aunque
+        haya una carpeta local con ese nombre y documentos remotos que no coinciden."""
+        (tmp_path / "Infohub" / "tributacion").mkdir(parents=True)
+        (tmp_path / "Infohub" / "tributacion" / "otra.pdf").write_text("x")
+        (tmp_path / "Infohub" / "WorkspaceA").mkdir(parents=True)
+        (tmp_path / "Infohub" / "WorkspaceA" / "doc1.pdf").write_text("x")
+        manager.watched_root = str(tmp_path)
+
+        def mock_get_docs(ws_name):
+            assert ws_name != "tributacion", "no debe consultar un workspace protegido"
+            return {"base_names": {"doc1"}, "doc_names": {"doc1": "workspacea/doc1.json"}, "raw_docs": [], "exists": True}
+
+        with patch.object(manager, "get_workspace_documents", side_effect=mock_get_docs):
+            with patch.object(manager, "delete_documents", return_value=(True, 0, [])) as mock_delete:
+                with patch.object(manager, "upload_file_to_workspace", return_value=(False, True, "already exists")) as mock_upload:
+                    with patch.object(manager, "_update_embeddings", return_value=True):
+                        result = manager.full_upload_and_clean()
+
+        assert result["protected"] == ["tributacion"]
+        assert "Protegidos, sin tocar: tributacion" in result["message"]
+        assert all(c.args[1] != "tributacion" for c in mock_upload.call_args_list)
+        mock_delete.assert_not_called()
+
+    def test_protected_workspaces_from_config_and_env(self):
+        with patch.dict(os.environ, {"PROTECTED_WORKSPACES": ""}):
+            mgr = InfoHubFileManager(config={"protected_workspaces": "Legal, Odoo 17"})
+        assert mgr.is_protected("legal") and mgr.is_protected("odoo 17")
+        assert not mgr.is_protected("tributacion")
+        with patch.dict(os.environ, {"PROTECTED_WORKSPACES": "solo-este"}):
+            mgr = InfoHubFileManager(config={"protected_workspaces": "Legal"})
+        assert mgr.is_protected("solo-este") and not mgr.is_protected("Legal")
+        with patch.dict(os.environ, {"PROTECTED_WORKSPACES": ""}):
+            mgr = InfoHubFileManager(config={})
+        assert mgr.is_protected("tributacion") and mgr.is_protected("odoo17")
+
     def test_no_orphans(self, manager, watched_dir):
         """When local and remote are in sync, nothing should be deleted."""
         manager.watched_root = str(watched_dir)

@@ -15,6 +15,13 @@ Panel de control web para sincronizar archivos locales con **AnythingLLM / InfoH
 
 ---
 
+## ⚠️ Con el InfoHub v1 (octubre de 2026)
+
+- **Planillas:** InfoHub carga cada hoja de un `.xlsx` como un documento aparte (`planilla.xlsx-<hoja>-<uuid>.json`). La limpieza las reconoce y no las borra mientras el archivo exista.
+- **Workspaces protegidos:** `protected_workspaces` (o `PROTECTED_WORKSPACES`) lista los workspaces que el file manager no sincroniza ni limpia, porque se cargan aparte. Por defecto, `tributacion` y `odoo17`, del piloto de Infohub Chat.
+- **Lotes:** los embeddings se mandan de a 10 documentos y el borrado de a 20, para que cada pedido termine antes del corte del proxy de producción (60 s). Tras un corte, se espera a que InfoHub termine en lugar de reenviar, porque reenviar duplica documentos.
+- **Borrado real:** la limpieza ahora borra con la ruta completa (`carpeta/archivo.json`). Antes, InfoHub respondía 200 sin borrar nada, así que la primera limpieza puede quitar huérfanos acumulados. Conviene revisar antes qué marcaría.
+
 ## 🚀 Requisitos
 
 - Python >= 3.10

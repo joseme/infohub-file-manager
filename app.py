@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 PORTAL_URL = os.getenv("PORTAL_URL", "").strip()
 
 # Retry policy for update-embeddings (openresty proxy returns 502/503/504 under load)
+# Workspaces que el file manager no sincroniza ni limpia: se cargan aparte
+# (piloto de Infohub Chat, scripts/cargar_workspace.py).
+PROTECTED_WORKSPACES_DEFAULT = "tributacion, odoo17"
 # Extensiones que InfoHub divide en un documento por hoja (fase 1 de Infohub Chat).
 SPREADSHEET_PER_SHEET_EXTS = {".xlsx"}
 EMBEDDINGS_MAX_RETRIES = 3
@@ -84,6 +87,9 @@ class InfoHubFileManager:
             self.ollama_model = os.getenv("OLLAMA_MODEL") or config.get("ollama_model", "llava:latest")
             self.image_description_active = config.get("image_description_active", True)
             self.watched_root = os.getenv("WATCHED_FOLDERS_ROOT") or config.get("watched_folders_root", "")
+            protected = os.getenv("PROTECTED_WORKSPACES") or config.get(
+                "protected_workspaces", PROTECTED_WORKSPACES_DEFAULT
+            )
         else:
             self.api_key = os.getenv("ANYTHINGLLM_API_KEY", "")
             self.base_url = os.getenv("ANYTHINGLLM_BASE_URL", "http://localhost:3000")
@@ -93,6 +99,12 @@ class InfoHubFileManager:
                 os.getenv("IMAGE_DESCRIPTION_ACTIVATE", "true").lower() == "true"
             )
             self.watched_root = os.getenv("WATCHED_FOLDERS_ROOT", "")
+            protected = os.getenv("PROTECTED_WORKSPACES") or PROTECTED_WORKSPACES_DEFAULT
+        self.protected_workspaces = {
+            self.get_workspace_slug(name.strip())
+            for name in str(protected or "").split(",")
+            if name.strip()
+        }
 
         # Cache within a single operation to avoid duplicate server lookups
         # for the same workspace and to remember docpaths already uploaded.
@@ -236,6 +248,19 @@ class InfoHubFileManager:
     def get_workspace_slug(self, workspace_name: str) -> str:
         """Convert workspace name to slug format"""
         return workspace_name.lower().replace(" ", "-").replace("_", "-")
+
+    def is_protected(self, workspace_name: str) -> bool:
+        """Workspace administrado fuera del file manager: no se sincroniza ni se limpia."""
+        return self.get_workspace_slug(workspace_name) in self.protected_workspaces
+
+    def _skip_protected(self, workspaces_by_name: dict) -> tuple[dict, list]:
+        protegidos = sorted(n for n in workspaces_by_name if self.is_protected(n))
+        for name in protegidos:
+            logger.info(f"Workspace '{name}' protegido: se administra fuera del file manager")
+        return (
+            {n: f for n, f in workspaces_by_name.items() if n not in protegidos},
+            protegidos,
+        )
 
     def is_workspace_accessible(self, workspace_name: str) -> bool:
         """Return True if the current API key can access the workspace."""
@@ -774,6 +799,9 @@ class InfoHubFileManager:
                         if workspace_folder.is_dir():
                             workspaces_by_name.setdefault(workspace_folder.name, workspace_folder)
 
+            # Protected workspaces are managed outside the file manager.
+            workspaces_by_name, protegidos = self._skip_protected(workspaces_by_name)
+
             # Only process workspaces the API key can access
             accessible = self.get_accessible_workspace_names(list(workspaces_by_name.keys()))
             workspaces_by_name = {
@@ -817,13 +845,17 @@ class InfoHubFileManager:
                 # Update embeddings for this workspace
                 self._update_embeddings(workspace_name)
 
+            message = f"Archivos: {uploaded} subidos, {skipped} omitidos. Imagenes: {images_processed} descritas, {images_skipped} con descripcion existente."
+            if protegidos:
+                message += f" Protegidos, sin tocar: {', '.join(protegidos)}."
             return {
                 "status": "success",
-                "message": f"Archivos: {uploaded} subidos, {skipped} omitidos. Imagenes: {images_processed} descritas, {images_skipped} con descripcion existente.",
+                "message": message,
                 "uploaded": uploaded,
                 "skipped": skipped,
                 "images_processed": images_processed,
                 "images_skipped": images_skipped,
+                "protected": protegidos,
             }
         except Exception as e:
             logger.error(f"Error sorting files: {e}")
@@ -868,6 +900,9 @@ class InfoHubFileManager:
                     for workspace_folder in item.iterdir():
                         if workspace_folder.is_dir():
                             workspaces_by_name.setdefault(workspace_folder.name, workspace_folder)
+
+            # Protected workspaces are managed outside the file manager.
+            workspaces_by_name, protegidos = self._skip_protected(workspaces_by_name)
 
             # Only process workspaces the API key can access
             accessible = self.get_accessible_workspace_names(list(workspaces_by_name.keys()))
@@ -948,6 +983,8 @@ class InfoHubFileManager:
             )
             if delete_errors:
                 result_msg += f", {len(delete_errors)} errores al eliminar"
+            if protegidos:
+                result_msg += f". Protegidos, sin tocar: {', '.join(protegidos)}"
 
             result = {
                 "status": "success" if not delete_errors else "warning",
@@ -956,6 +993,7 @@ class InfoHubFileManager:
                 "uploaded": uploaded,
                 "skipped": skipped,
                 "deleted": deleted,
+                "protected": protegidos,
             }
             if delete_errors:
                 result["delete_errors"] = delete_errors
