@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 PORTAL_URL = os.getenv("PORTAL_URL", "").strip()
 
 # Retry policy for update-embeddings (openresty proxy returns 502/503/504 under load)
+# Extensiones que InfoHub divide en un documento por hoja (fase 1 de Infohub Chat).
+SPREADSHEET_PER_SHEET_EXTS = {".xlsx"}
 EMBEDDINGS_MAX_RETRIES = 3
 EMBEDDINGS_RETRY_STATUS_CODES = {502, 503, 504}
 EMBEDDINGS_RETRY_BACKOFF_SECONDS = 5
@@ -455,7 +457,17 @@ class InfoHubFileManager:
             "",
             server_base,
         )
-        return self._canonical_name(stripped) in forms
+        if self._canonical_name(stripped) in forms:
+            return True
+        # InfoHub carga cada hoja de un .xlsx como un documento aparte:
+        # 'planilla.xlsx' → 'planilla.xlsx-<hoja>-<uuid>.json'. La comparación
+        # incluye la extensión, así que 'planilla.xlsx' no toma 'planilla2.xlsx-…'.
+        if Path(local_remote_name).suffix.lower() in SPREADSHEET_PER_SHEET_EXTS:
+            full = self._canonical_name(local_remote_name)
+            return self._canonical_name(stripped).startswith(full) and len(
+                self._canonical_name(stripped)
+            ) > len(full)
+        return False
 
     def _update_embeddings(self, workspace_name: str) -> bool:
         """Trigger embedding generation for all documents in a workspace.

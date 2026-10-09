@@ -876,6 +876,18 @@ class TestRemotePathHelpers:
         ) is True
 
 
+    def test_xlsx_sheets_are_not_orphans(self, manager):
+        # InfoHub carga cada hoja de un .xlsx como documento aparte.
+        uuid = "ac6e67ee-187a-40ac-aa6a-ce1fb1aebb3d"
+        assert manager._remote_base_matches(f"Sub__planilla.xlsx-planilla-{uuid}", "Sub__planilla.xlsx") is True
+        assert manager._remote_base_matches(f"Sub__planilla.xlsx-Hoja-2-{uuid}", "Sub__planilla.xlsx") is True
+        assert manager._remote_base_matches(f"Codigos-Blawd.xlsx-Hoja1-{uuid}", "Códigos Blawd.xlsx") is True
+        # Otra planilla con nombre que empieza igual no se confunde.
+        assert manager._remote_base_matches(f"Sub__planilla2.xlsx-Hoja1-{uuid}", "Sub__planilla.xlsx") is False
+        # Solo las planillas se dividen por hoja: un PDF sigue exigiendo el nombre exacto.
+        assert manager._remote_base_matches(f"informe.pdf-anexo-{uuid}", "informe.pdf") is False
+
+
 # ---------------------------------------------------------------------------
 # delete_documents
 # ---------------------------------------------------------------------------
