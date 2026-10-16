@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 218 113" role="img" aria-label="InfoHub">
+  <rect x="0" y="50" width="12" height="12" rx="2.4" fill="#7B61FF"/>
+  <rect x="25" y="25" width="22" height="22" rx="4.4" fill="#7B61FF"/>
+  <rect x="25" y="66" width="22" height="22" rx="4.4" fill="#7B61FF"/>
+  <rect x="60" y="0" width="31" height="31" rx="6.2" fill="#7B61FF"/>
+  <rect x="60" y="41" width="31" height="31" rx="6.2" fill="#7B61FF"/>
+  <rect x="60" y="82" width="31" height="31" rx="6.2" fill="#7B61FF"/>
+  <circle cx="160.5" cy="56.5" r="56.5" fill="#7B61FF"/>
+</svg>
