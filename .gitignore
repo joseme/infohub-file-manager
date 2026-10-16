@@ -22,3 +22,8 @@ config.json
 
 # stray local backup, not the tracked app.py
 app (copia 1).py
+
+# estado de ejecución y archivos locales
+logs/
+.claude/
+typescript

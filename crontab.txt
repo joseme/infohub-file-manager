@@ -1,0 +1,14 @@
+# Actualización semanal de la base documental cr-tributario
+0 3 * * 0 cd /home/jose/cr-tributario && .venv/bin/python actualizar.py >> logs/cron.log 2>&1
+MAILTO=""
+# Actualización semanal de la base documental cr-laboral
+0 4 * * 0 cd /home/jose/cr-laboral && .venv/bin/python actualizar.py >> logs/cron.log 2>&1
+MAILTO=""
+# Actualización semanal de la base documental cr-seguros
+0 5 * * 0 cd /home/jose/cr-seguros && .venv/bin/python actualizar.py >> logs/cron.log 2>&1
+MAILTO=""
+# Sincronización de ~/Documentos/Infohub con los workspaces de InfoHub.
+# Domingo 06:30, después de los tres bots (03:00/04:00/05:00); si alguno sigue
+# corriendo, sync_bot.py espera a que suelte su lock (log en logs/).
+30 6 * * 0 cd /home/jose/desarrollo/infohub_file_manager && ./venv/bin/python sync_bot.py >> logs/cron.log 2>&1
+MAILTO=""

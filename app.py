@@ -19,6 +19,7 @@ from flet import Icons
 import ui_theme as T
 from dotenv import load_dotenv
 from config_manager import ConfigManager, DEFAULTS, BASE_DIR
+from workspace_map import WorkspaceResolver
 
 # Load environment variables
 # Anclado al dir del ejecutable, no al CWD: si no, doble click no lee el .env
@@ -114,6 +115,9 @@ class InfoHubFileManager:
         # None = sin filtro de usuario; tras login: {slug: nombre} habilitados.
         self.session_token: str = ""
         self.allowed_workspaces: dict[str, str] | None = None
+
+        # Resuelve el slug real de cada workspace contra el servidor (perezoso).
+        self._resolver: WorkspaceResolver | None = None
 
     def login(self, username: str, password: str) -> tuple[bool, str | None]:
         """Autentica contra InfoHub y guarda JWT + workspaces habilitados del usuario.
@@ -246,8 +250,21 @@ class InfoHubFileManager:
         }
 
     def get_workspace_slug(self, workspace_name: str) -> str:
-        """Convert workspace name to slug format"""
-        return workspace_name.lower().replace(" ", "-").replace("_", "-")
+        """Slug real del workspace en el servidor para un nombre de carpeta.
+
+        El servidor no sigue la regla local ('Tributación CR' es 'tributacion',
+        'Legislación Seguros CR' es 'seguros-cr'), así que se consulta
+        GET /api/v1/workspaces y se usa el slug real (con alias locales como
+        odoo -> odoo17). Si el workspace no existe todavía, se devuelve la regla
+        antigua para que create_workspace lo cree con ese slug.
+        """
+        try:
+            if self._resolver is None:
+                self._resolver = WorkspaceResolver(self.base_url, self.api_key)
+            return self._resolver.slug(workspace_name)[0]
+        except Exception as e:
+            logger.warning(f"No se pudo resolver el slug de '{workspace_name}': {e}")
+            return workspace_name.lower().replace(" ", "-").replace("_", "-")
 
     def is_protected(self, workspace_name: str) -> bool:
         """Workspace administrado fuera del file manager: no se sincroniza ni se limpia."""
@@ -708,9 +725,12 @@ class InfoHubFileManager:
 
     def upload_file_to_workspace(
         self, file_path: Path, workspace_name: str,
-        workspace_folder=None, skip_if_exists: bool = True,
+        workspace_folder=None, skip_if_exists: bool = True, remote_name: str | None = None,
     ) -> tuple:
         """Upload a single file to AnythingLLM workspace
+
+        remote_name: nombre con el que se sube en el servidor; por defecto el
+        nombre calificado por carpeta ('Sub/informe.pdf' -> 'Sub__informe.pdf').
 
         Returns:
             tuple: (success: bool, skipped: bool, message: str)
@@ -719,7 +739,7 @@ class InfoHubFileManager:
             # Folder-qualified remote identity so same-stem files in different
             # subfolders don't collide (Sub/informe.pdf → Sub__informe.pdf).
             rel = self._rel_path(file_path, workspace_folder or file_path.parent)
-            remote = self._remote_name(rel)
+            remote = remote_name or self._remote_name(rel)
 
             # Auto-create workspace if missing + check file existence
             docs = self.get_workspace_documents(workspace_name)
@@ -1207,12 +1227,13 @@ def _main(page: ft.Page):
     # ========== PAGE CONFIGURATION ==========
     config = ConfigManager()
     page.title = config.get("app_title", "InfoHub File Manager")
-    page.theme_mode = ft.ThemeMode.DARK
+    page.theme_mode = ft.ThemeMode.LIGHT
+    page.fonts = T.FONTS
     page.padding = 0
     page.spacing = 0
     page.bgcolor = T.BG_PRIMARY
 
-    # InfoHub DMS theme ("Azul profesional" — frontend/src/index.css)
+    # Marca InfoHub (manual KnowHub v1.0): tokens en ui_theme.py
     page.theme = T.page_theme()
 
     manager = InfoHubFileManager(config)
@@ -1253,7 +1274,7 @@ def _main(page: ft.Page):
         bgcolor=T.BG_SECONDARY,
         title=ft.Row(
             [
-                ft.Icon(Icons.LOCK, color=T.ACCENT_HOVER),
+                ft.Icon(Icons.LOCK_OUTLINED, color=T.ACCENT_HOVER),
                 ft.Text("Iniciar sesión en InfoHub", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
             ],
             spacing=8,
@@ -1273,16 +1294,16 @@ def _main(page: ft.Page):
         actions=[
             ft.TextButton(
                 "Volver al inicio" if PORTAL_URL else "Salir",
-                icon=Icons.HOME if PORTAL_URL else Icons.CLOSE,
+                icon=Icons.HOME_OUTLINED if PORTAL_URL else Icons.CLOSE_OUTLINED,
                 on_click=lambda e: go_to_portal() if PORTAL_URL else page.window.close(),
             ),
             ft.FilledButton(
                 "Ingresar",
-                icon=Icons.LOGIN,
+                icon=Icons.LOGIN_OUTLINED,
                 on_click=lambda e: _handle_login(),
                 style=ft.ButtonStyle(
                     bgcolor=T.ACCENT,
-                    color=T.TEXT,
+                    color=T.ON_ACCENT,
                     shape=T.SHAPE,
                 ),
             ),
@@ -1296,7 +1317,7 @@ def _main(page: ft.Page):
         bgcolor=T.BG_SECONDARY,
         title=ft.Row(
             [
-                ft.Icon(Icons.FOLDER_SPECIAL, color=T.ACCENT_HOVER),
+                ft.Icon(Icons.FOLDER_SPECIAL_OUTLINED, color=T.ACCENT_HOVER),
                 ft.Text("Tus workspaces habilitados", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
             ],
             spacing=8,
@@ -1305,11 +1326,11 @@ def _main(page: ft.Page):
         actions=[
             ft.FilledButton(
                 "Aceptar",
-                icon=Icons.CHECK,
+                icon=Icons.CHECK_OUTLINED,
                 on_click=lambda e: page.pop_dialog(),
                 style=ft.ButtonStyle(
                     bgcolor=T.ACCENT,
-                    color=T.TEXT,
+                    color=T.ON_ACCENT,
                     shape=T.SHAPE,
                 ),
             ),
@@ -1322,7 +1343,7 @@ def _main(page: ft.Page):
             user_ws_list.controls = [
                 ft.Row(
                     [
-                        ft.Icon(Icons.FOLDER, color=T.ACCENT_HOVER, size=18),
+                        ft.Icon(Icons.FOLDER_OUTLINED, color=T.ACCENT_HOVER, size=18),
                         ft.Text(name, size=14, expand=True),
                         ft.Text(slug, size=11, color=T.TEXT_3),
                     ],
@@ -1420,7 +1441,8 @@ def _main(page: ft.Page):
         threading.Thread(target=_do_login, daemon=True).start()
 
     sso_ticket = _query_param(page, "ticket")
-    if not sso_ticket:
+    # SPIKE driver.js: permite ver el panel sin InfoHub real. No usar en producción.
+    if not sso_ticket and os.getenv("TOUR_SPIKE_SKIP_LOGIN") != "1":
         page.show_dialog(login_dialog)
 
     # ========== STATE ==========
@@ -1430,7 +1452,7 @@ def _main(page: ft.Page):
 
     # --- SnackBar for notifications ---
     snackbar = ft.SnackBar(
-        content=ft.Text("", color=T.TEXT),
+        content=ft.Text("", color=T.ON_POPUP),
         action=ft.SnackBarAction(
             label="Cerrar",
             on_click=lambda e: setattr(snackbar, "open", False),
@@ -1452,8 +1474,8 @@ def _main(page: ft.Page):
             ft.Row(
                 [
                     ft.Container(
-                        content=ft.Icon(icon, color=T.TEXT, size=22),
-                        bgcolor=color,
+                        content=ft.Icon(icon, color=color, size=22),
+                        bgcolor=T.BG_PRIMARY,
                         border_radius=T.RADIUS,
                         padding=10,
                         width=44,
@@ -1485,10 +1507,10 @@ def _main(page: ft.Page):
             col={"xs": 6, "sm": 6, "md": 3, "lg": 3, "xl": 3},
         )
 
-    workspaces_stat = create_stat_card("0", "Workspaces", Icons.FOLDER_COPY, T.ACCENT)
-    files_stat = create_stat_card("0", "Archivos", Icons.DESCRIPTION, T.TEAL)
-    uploaded_stat = create_stat_card("0", "Subidos", Icons.CLOUD_UPLOAD, T.OK_DEEP)
-    pending_stat = create_stat_card("0", "Pendientes", Icons.SCHEDULE, T.WARN_DEEP)
+    workspaces_stat = create_stat_card("0", "Workspaces", Icons.FOLDER_COPY_OUTLINED, T.ACCENT)
+    files_stat = create_stat_card("0", "Archivos", Icons.DESCRIPTION_OUTLINED, T.TEAL)
+    uploaded_stat = create_stat_card("0", "Subidos", Icons.CLOUD_UPLOAD_OUTLINED, T.OK_DEEP)
+    pending_stat = create_stat_card("0", "Pendientes", Icons.SCHEDULE_OUTLINED, T.WARN_DEEP)
 
     def update_stats(result=None):
         if not result or result.get("status") not in ("success", "warning"):
@@ -1560,24 +1582,23 @@ def _main(page: ft.Page):
         page.update()
 
     # --- Operation Cards ---
-    def create_operation_card(icon, title, description, on_click, color, badge_text=None):
+    def create_operation_card(icon, title, description, on_click, color, badge_text=None, tour_id=None):
         badge = None
         if badge_text:
             badge = ft.Container(
-                content=ft.Text(badge_text, size=10, weight=ft.FontWeight.BOLD, color=T.TEXT),
+                content=ft.Text(badge_text, size=10, weight=ft.FontWeight.BOLD, color=T.ON_ACCENT),
                 bgcolor=color,
                 border_radius=T.RADIUS,
                 padding=ft.padding.Padding.symmetric(horizontal=8, vertical=2),
             )
 
-        return T.card(
-            ft.Column(
+        body = ft.Column(
                 [
                     ft.Row(
                         [
                             ft.Container(
-                                content=ft.Icon(icon, color=T.TEXT, size=22),
-                                bgcolor=color,
+                                content=ft.Icon(icon, color=color, size=22),
+                                bgcolor=T.BG_PRIMARY,
                                 border_radius=T.RADIUS,
                                 padding=10,
                                 width=44,
@@ -1606,7 +1627,12 @@ def _main(page: ft.Page):
                 ],
                 spacing=10,
                 alignment=ft.MainAxisAlignment.START,
-            ),
+            )
+        if tour_id:
+            # Ancla DOM para el tutorial (driver.js, assets/tour/tour.js)
+            body = ft.Semantics(label=tour_id, container=True, content=body)
+        return T.card(
+            body,
             col={"xs": 12, "sm": 6, "md": 4, "lg": 4, "xl": 3},
         )
 
@@ -1734,7 +1760,7 @@ def _main(page: ft.Page):
             explorer_dialog.content = ft.Container(
                 content=ft.Column(
                     [
-                        ft.Icon(Icons.FOLDER_OFF, size=48, color=T.BORDER_STRONG),
+                        ft.Icon(Icons.FOLDER_OFF_OUTLINED, size=48, color=T.BORDER_STRONG),
                         ft.Text("No se encontraron workspaces", color=T.TEXT_2),
                     ],
                     alignment=ft.MainAxisAlignment.CENTER,
@@ -1767,11 +1793,11 @@ def _main(page: ft.Page):
                             [
                                 ft.Row(
                                     [
-                                        ft.Icon(Icons.FOLDER, color=T.ACCENT_HOVER, size=20),
+                                        ft.Icon(Icons.FOLDER_OUTLINED, color=T.ACCENT_HOVER, size=20),
                                         ft.Text(name, size=14, weight=ft.FontWeight.BOLD, color=T.TEXT),
                                         ft.Container(expand=True),
                                         ft.Container(
-                                            content=ft.Text(f"{data['file_count']}", size=11, weight=ft.FontWeight.BOLD, color=T.TEXT),
+                                            content=ft.Text(f"{data['file_count']}", size=11, weight=ft.FontWeight.BOLD, color=T.ON_ACCENT),
                                             bgcolor=T.ACCENT_HOVER,
                                             border_radius=12,
                                             padding=ft.padding.Padding.symmetric(horizontal=8, vertical=2),
@@ -1829,7 +1855,7 @@ def _main(page: ft.Page):
                     content=ft.Column(
                         [
                             ft.Row(
-                                [ft.Icon(Icons.FOLDER, color=T.ACCENT_HOVER, size=20),
+                                [ft.Icon(Icons.FOLDER_OUTLINED, color=T.ACCENT_HOVER, size=20),
                                  ft.Text(encabezado, size=14, weight=ft.FontWeight.BOLD, color=T.TEXT)],
                                 spacing=8,
                             ),
@@ -1924,7 +1950,7 @@ def _main(page: ft.Page):
         bgcolor=T.BG_SECONDARY,
         title=ft.Row(
             [
-                ft.Icon(Icons.TUNE, color=T.ACCENT_HOVER),
+                ft.Icon(Icons.TUNE_OUTLINED, color=T.ACCENT_HOVER),
                 ft.Text("Configuración", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
             ],
             spacing=8,
@@ -1936,16 +1962,16 @@ def _main(page: ft.Page):
         actions=[
             ft.TextButton(
                 "Cancelar",
-                icon=Icons.CLOSE,
+                icon=Icons.CLOSE_OUTLINED,
                 on_click=lambda e: page.pop_dialog(),
             ),
             ft.FilledButton(
                 "Guardar",
-                icon=Icons.SAVE,
+                icon=Icons.SAVE_OUTLINED,
                 on_click=lambda e: save_config(),
                 style=ft.ButtonStyle(
                     bgcolor=T.ACCENT,
-                    color=T.TEXT,
+                    color=T.ON_ACCENT,
                     shape=T.SHAPE,
                 ),
             ),
@@ -2113,15 +2139,7 @@ def _main(page: ft.Page):
 
     # AppBar
     app_bar = ft.AppBar(
-        leading=ft.Icon(Icons.CLOUD_SYNC, color=T.TEXT, size=28),
-        leading_width=56,
-        title=ft.Column(
-            [
-                ft.Text("InfoHub File Manager", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
-                ft.Text("Sincronizacion con InfoHub", size=12, color=T.TEXT_2),
-            ],
-            spacing=0,
-        ),
+        title=T.brand("File Manager"),
         center_title=False,
         bgcolor=T.BG_PRIMARY,
         elevation=0,
@@ -2129,7 +2147,7 @@ def _main(page: ft.Page):
             *(
                 [
                     ft.IconButton(
-                        icon=Icons.HOME,
+                        icon=Icons.HOME_OUTLINED,
                         icon_color=T.TEXT,
                         tooltip="Volver al inicio de InfoHub",
                         on_click=lambda e: go_to_portal(),
@@ -2139,7 +2157,7 @@ def _main(page: ft.Page):
                 else []
             ),
             ft.IconButton(
-                icon=Icons.REFRESH,
+                icon=Icons.REFRESH_OUTLINED,
                 icon_color=T.TEXT,
                 tooltip="Actualizar Estado",
                 on_click=lambda e: (
@@ -2147,11 +2165,15 @@ def _main(page: ft.Page):
                     show_snackbar("Estado actualizado", T.OK_DEEP),
                 ),
             ),
-            ft.IconButton(
-                icon=Icons.SETTINGS,
-                icon_color=T.TEXT,
-                tooltip="Configuración",
-                on_click=open_config_editor,
+            ft.Semantics(
+                label="tour:config",
+                container=True,
+                content=ft.IconButton(
+                    icon=Icons.SETTINGS_OUTLINED,
+                    icon_color=T.TEXT,
+                    tooltip="Configuración",
+                    on_click=open_config_editor,
+                ),
             ),
         ],
     )
@@ -2160,42 +2182,43 @@ def _main(page: ft.Page):
     operations_grid = ft.ResponsiveRow(
         [
             create_operation_card(
-                Icons.CLOUD_SYNC,
+                Icons.CLOUD_SYNC_OUTLINED,
                 "Carga Completa y Limpieza",
                 "Sincronizacion completa: subir, actualizar y eliminar documentos huerfanos",
                 on_full_upload,
                 T.TEAL,
             ),
             create_operation_card(
-                Icons.FIND_IN_PAGE,
+                Icons.FIND_IN_PAGE_OUTLINED,
                 "Simular Limpieza",
                 "Ver qué borraría y qué subiría la carga completa, sin cambiar nada",
                 on_simulate_clean,
                 T.ACCENT_HOVER,
             ),
             create_operation_card(
-                Icons.SYNC,
+                Icons.SYNC_OUTLINED,
                 "Actualizar Espacios de Trabajo",
                 "Generar descripciones de imagenes con IA y subir archivos a workspaces",
                 on_sort_files,
                 T.ACCENT_HOVER,
             ),
             create_operation_card(
-                Icons.CLEANING_SERVICES,
+                Icons.CLEANING_SERVICES_OUTLINED,
                 "Limpiar Carpetas",
                 "Eliminar workspaces vacios de InfoHub",
                 on_clean_folders,
                 T.WARN,
             ),
             create_operation_card(
-                Icons.SEARCH,
+                Icons.SEARCH_OUTLINED,
                 "Escanear Archivos",
                 "Previsualizar contenido de carpetas sin subir",
                 on_scan_files,
                 T.TEAL,
+                tour_id="tour:op-scan",
             ),
             create_operation_card(
-                Icons.IMAGE,
+                Icons.IMAGE_OUTLINED,
                 "Descripciones de Imagenes",
                 "Generar descripciones con IA para imagenes sin descripcion",
                 on_create_image_descriptions,
@@ -2214,7 +2237,7 @@ def _main(page: ft.Page):
                         [
                             ft.Row(
                                 [
-                                    ft.Icon(Icons.TERMINAL, color=T.TEXT_2, size=18),
+                                    ft.Icon(Icons.TERMINAL_OUTLINED, color=T.TEXT_2, size=18),
                                     ft.Text("Registro de Operaciones", size=14, weight=ft.FontWeight.BOLD, color=T.TEXT),
                                 ],
                                 spacing=8,
@@ -2222,7 +2245,7 @@ def _main(page: ft.Page):
                             ft.Container(expand=True),
                             ft.TextButton(
                                 "Limpiar",
-                                icon=Icons.CLEAR_ALL,
+                                icon=Icons.CLEAR_ALL_OUTLINED,
                                 on_click=clear_logs,
                             ),
                         ],
@@ -2324,4 +2347,5 @@ if __name__ == "__main__":
         main,
         view=ft.AppView.WEB_BROWSER,
         port=int(os.getenv("APP_PORT", 8500)),
+        assets_dir=str(Path(BASE_DIR) / "assets"),
     )

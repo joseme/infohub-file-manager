@@ -1,44 +1,65 @@
 """
-InfoHub design tokens — ported from the InfoHub DMS frontend
-(frontend/src/index.css + tailwind.config.js, "Azul profesional" theme).
-Single source of truth for colors so the Flet panel matches the web app.
+Tokens de diseño de InfoHub File Manager según el manual de marca KnowHub v1.0
+(octubre 2026). Interfaz de producto: blanco/crema + tinta, acento violeta InfoHub,
+índigo solo para la firma «by KnowHub». Misma paleta que InfoHub Chat y DMS
+(~/desarrollo/knowhub_assets/marca/marca.css).
 """
 
 import flet as ft
 
-# Surfaces
-BG_PRIMARY = "#0d1520"   # app background
-BG_SECONDARY = "#16202e"  # cards / panels / chat
-BG_INPUT = "#1e2a3b"  # inputs, action menus
-BG_POPUP = "#0a111b"  # popups, snackbars
-BG_CONTAINER = "#16202e"
+# Marca (manual pág. 03)
+TINTA = "#14152E"
+CREMA = "#FBF6E3"
+INDIGO = "#4B4FC4"
+VIOLETA = "#7B61FF"          # símbolo, foco, indicadores
+VIOLETA_OSC = "#5A42D6"      # botones con texto blanco (6,6:1) y textos de acento
+VIOLETA_VELO = "#EFEBFF"
 
-# Accent
-ACCENT = "#3b82f6"
-ACCENT_HOVER = "#60a5fa"
-ACCENT_DEEP = "#2563eb"
-ACCENT_SOFT = "#93c5fd"
-ACCENT_DIM = "#263449"  # secondary buttons
-ACCENT_WASH = "#1e2a3b"  # hover wash / chips
+# Superficies
+BG_PRIMARY = CREMA       # fondo de la app
+BG_SECONDARY = "#FFFFFF"  # tarjetas / paneles
+BG_INPUT = "#FFFFFF"      # campos
+BG_POPUP = TINTA          # snackbars (texto crema)
+BG_CONTAINER = "#FFFFFF"
 
-# Text
-TEXT = "#ffffff"
-TEXT_2 = "#a3b2c8"
-TEXT_3 = "#6b7d94"
-PLACEHOLDER = "#57585a"
+# Acento
+ACCENT = VIOLETA_OSC
+ACCENT_HOVER = VIOLETA_OSC  # íconos y textos de acento sobre fondo claro
+ACCENT_DEEP = "#4A33BD"
+ACCENT_SOFT = "#A695FF"
+ACCENT_DIM = "#F2EBD1"      # botones secundarios
+ACCENT_WASH = VIOLETA_VELO  # chips / hover
+ON_ACCENT = "#FFFFFF"       # texto e íconos sobre ACCENT y colores de estado
 
-# Lines
-BORDER = "#223047"
-BORDER_STRONG = "#3c506b"
+# Texto
+TEXT = TINTA
+TEXT_2 = "#5A5B70"
+TEXT_3 = "#7A7B8C"
+PLACEHOLDER = "#8E8FA0"
+ON_POPUP = CREMA
 
-# Status
-OK = "#4ade80"
-OK_DEEP = "#15803d"
-WARN = "#fec84b"
-WARN_DEEP = "#b45309"
-DANGER = "#f04438"
-DANGER_DEEP = "#b42318"
-TEAL = "#0ba5ec"
+# Líneas
+BORDER = "#E3DCC0"
+BORDER_STRONG = "#C9C7BB"
+
+# Estados (texto sobre claro con contraste AA; *_DEEP como fondo con texto blanco)
+OK = "#127A4A"
+OK_DEEP = "#127A4A"
+WARN = "#B54708"
+WARN_DEEP = "#B54708"
+DANGER = "#B42318"
+DANGER_DEEP = "#B42318"
+TEAL = VIOLETA_OSC  # acento único por producto: las tarjetas informativas van en violeta
+
+# Tipografía (manual pág. 04). Registrar con page.fonts = FONTS.
+FONT_SANS = "IBM Plex Sans"
+FONT_TITULO = "Space Grotesk"
+FONT_MONO = "IBM Plex Mono"
+FONTS = {
+    FONT_SANS: "fonts/IBMPlexSans-Regular.ttf",
+    FONT_TITULO: "fonts/SpaceGrotesk-SemiBold.ttf",
+    FONT_MONO: "fonts/IBMPlexMono-Medium.ttf",
+}
 
 RADIUS = 8
 
@@ -50,19 +71,47 @@ SHAPE = ft.RoundedRectangleBorder(radius=RADIUS)
 
 
 def page_theme() -> ft.Theme:
-    """Flet theme matching the DMS dark palette."""
+    """Tema claro de la marca InfoHub."""
     return ft.Theme(
-        color_scheme_seed=ACCENT,
+        color_scheme_seed=VIOLETA,
         use_material3=True,
-        font_family=None,  # ponytail: keep system font, DMS uses Plus Jakarta Sans (not bundled)
+        font_family=FONT_SANS,
         color_scheme=ft.ColorScheme(
             primary=ACCENT,
-            on_primary=TEXT,
+            on_primary=ON_ACCENT,
             secondary=ACCENT_HOVER,
             surface=BG_SECONDARY,
             on_surface=TEXT,
             error=DANGER,
         ),
+    )
+
+
+_LOGO = ft.TextStyle(letter_spacing=-0.8)  # −4,5 % del cuerpo (manual pág. 06)
+
+
+def brand(subtitle):
+    """Imagotipo: símbolo InfoHub + nombre (Space Grotesk) + «by KnowHub» (Plex Mono, índigo)."""
+    return ft.Row(
+        [
+            ft.Image(src="marca/infohub-simbolo.svg", width=46, height=24),
+            ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Text("InfoHub", size=18, font_family=FONT_TITULO, color=TEXT, style=_LOGO),
+                            ft.Text(subtitle, size=18, font_family=FONT_TITULO, color=TEXT_2, style=_LOGO),
+                        ],
+                        spacing=5,
+                    ),
+                    ft.Text("by KnowHub", size=11, font_family=FONT_MONO, color=INDIGO),
+                ],
+                spacing=0,
+                tight=True,
+            ),
+        ],
+        spacing=12,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
 
@@ -82,7 +131,7 @@ def card(content, *, padding=20, col=None):
 
 
 def textfield(**kw):
-    """Dark input matching --theme-settings-input-bg / chat-input border."""
+    """Campo con borde de la marca y foco violeta."""
     kw.setdefault("border_color", BORDER_STRONG)
     kw.setdefault("focused_border_color", ACCENT)
     kw.setdefault("color", TEXT)
@@ -106,7 +155,7 @@ def primary_button(label, icon=None, on_click=None, **kw):
         on_click=on_click,
         style=ft.ButtonStyle(
             bgcolor=ACCENT,
-            color=TEXT,
+            color=ON_ACCENT,
             shape=SHAPE,
             padding=ft.padding.Padding.symmetric(horizontal=16, vertical=10),
         ),
@@ -118,7 +167,7 @@ def dialog(title, content, actions, *, width=None, height=None):
     return ft.AlertDialog(
         modal=True,
         bgcolor=BG_SECONDARY,
-        title=ft.Text(title, size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+        title=ft.Text(title, size=18, font_family=FONT_TITULO, color=TEXT),
         content=ft.Container(content=content, width=width, height=height),
         actions=actions,
         actions_alignment=ft.MainAxisAlignment.END,
