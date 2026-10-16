@@ -2,8 +2,8 @@ phase: 3
 status: complete
 plan_confirmed: true
 task_type: "build"
-last_action: "README brought back in sync with config.json/Docker/PyInstaller reality; added missing .env.example"
-next_action: "none — phase closed"
+last_action: "Plan de migración ManyChat→ChatWoot documentado en PLAN_MIGRACION_MANYCHAT_A_CHATWOOT.md (solo plan, sin código)"
+next_action: "Aprobación del plan y decisión de implementación (Fase 0: inventario ManyChat)"
 requires_design_first: false
 design_stage: "pending"
 design_approved: false

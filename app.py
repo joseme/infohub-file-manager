@@ -19,6 +19,7 @@ from flet import Icons
 import ui_theme as T
 from dotenv import load_dotenv
 from config_manager import ConfigManager, DEFAULTS, BASE_DIR
+from workspace_map import WorkspaceResolver
 
 # Load environment variables
 # Anclado al dir del ejecutable, no al CWD: si no, doble click no lee el .env
@@ -91,6 +92,9 @@ class InfoHubFileManager:
         # None = sin filtro de usuario; tras login: {slug: nombre} habilitados.
         self.session_token: str = ""
         self.allowed_workspaces: dict[str, str] | None = None
+
+        # Resuelve el slug real de cada workspace contra el servidor (perezoso).
+        self._resolver: WorkspaceResolver | None = None
 
     def login(self, username: str, password: str) -> tuple[bool, str | None]:
         """Autentica contra InfoHub y guarda JWT + workspaces habilitados del usuario.
@@ -223,8 +227,21 @@ class InfoHubFileManager:
         }
 
     def get_workspace_slug(self, workspace_name: str) -> str:
-        """Convert workspace name to slug format"""
-        return workspace_name.lower().replace(" ", "-").replace("_", "-")
+        """Slug real del workspace en el servidor para un nombre de carpeta.
+
+        El servidor no sigue la regla local ('Tributación CR' es 'tributacion',
+        'Legislación Seguros CR' es 'seguros-cr'), así que se consulta
+        GET /api/v1/workspaces y se usa el slug real (con alias locales como
+        odoo -> odoo17). Si el workspace no existe todavía, se devuelve la regla
+        antigua para que create_workspace lo cree con ese slug.
+        """
+        try:
+            if self._resolver is None:
+                self._resolver = WorkspaceResolver(self.base_url, self.api_key)
+            return self._resolver.slug(workspace_name)[0]
+        except Exception as e:
+            logger.warning(f"No se pudo resolver el slug de '{workspace_name}': {e}")
+            return workspace_name.lower().replace(" ", "-").replace("_", "-")
 
     def is_workspace_accessible(self, workspace_name: str) -> bool:
         """Return True if the current API key can access the workspace."""
@@ -470,34 +487,31 @@ class InfoHubFileManager:
                 logger.warning(f"Cannot update embeddings: workspace '{workspace_name}' not found")
                 return False
 
-            # Collect all server-side document paths from the workspace
-            docpaths = [
-                doc["docpath"] for doc in docs.get("raw_docs", [])
-                if isinstance(doc, dict) and doc.get("docpath")
-            ]
-            # Uploads on this InfoHub instance are not registered in the
-            # workspace listing until processed — merge in the documents area.
-            # Solo se envían los NO registrados: re-enviar existentes crea
-            # filas duplicadas en workspace_documents.
-            existing = set(docpaths)
-            new_paths = [
-                p for p in self._get_documents_area_docpaths(slug)
-                if p not in existing
-            ]
-            if not new_paths:
-                logger.info(f"No new documents to embed in workspace '{workspace_name}'")
-                return True
-            docpaths = new_paths
-
+            # Los pendientes se recalculan en cada intento (ver abajo): así un
+            # reintento tras un 502/503/504 no reenvía lo ya registrado.
             url = f"{self.base_url}/api/v1/workspace/{slug}/update-embeddings"
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
                 "accept": "application/json",
             }
-            payload = {"adds": docpaths, "deletes": []}
 
             for attempt in range(EMBEDDINGS_MAX_RETRIES):
+                # Recalcular pendientes en cada intento: un 502/503/504 del proxy
+                # puede haber procesado los "adds" igualmente, y reenviar la lista
+                # completa crea filas DUPLICADAS en workspace_documents (un doc
+                # registrado 3 veces = mismo docpath con 3 docIds distintos).
+                registrados = {
+                    d["docpath"] for d in self.get_workspace_documents(workspace_name).get("raw_docs", [])
+                    if isinstance(d, dict) and d.get("docpath")
+                }
+                pendientes = [p for p in dict.fromkeys(self._get_documents_area_docpaths(slug))
+                              if p not in registrados]
+                if not pendientes:
+                    logger.info(f"Embeddings already up to date for '{workspace_name}'")
+                    return True
+
+                payload = {"adds": pendientes, "deletes": []}
                 try:
                     response = requests.post(url, headers=headers, json=payload, timeout=300)
                 except requests.RequestException as e:
@@ -510,7 +524,7 @@ class InfoHubFileManager:
                     logger.error(f"Error updating embeddings for '{workspace_name}': {e}")
                     return False
                 if response.status_code == 200:
-                    logger.info(f"Embeddings updated for '{workspace_name}' ({len(docpaths)} docs)")
+                    logger.info(f"Embeddings updated for '{workspace_name}' ({len(pendientes)} docs)")
                     return True
                 if (
                     response.status_code in EMBEDDINGS_RETRY_STATUS_CODES
@@ -518,7 +532,7 @@ class InfoHubFileManager:
                 ):
                     logger.warning(
                         f"Embeddings update returned {response.status_code} "
-                        f"(attempt {attempt + 1}/{EMBEDDINGS_MAX_RETRIES}); retrying"
+                        f"(attempt {attempt + 1}/{EMBEDDINGS_MAX_RETRIES}); retrying con solo los pendientes"
                     )
                     time.sleep(EMBEDDINGS_RETRY_BACKOFF_SECONDS * (attempt + 1))
                     continue
@@ -578,9 +592,12 @@ class InfoHubFileManager:
 
     def upload_file_to_workspace(
         self, file_path: Path, workspace_name: str,
-        workspace_folder=None, skip_if_exists: bool = True,
+        workspace_folder=None, skip_if_exists: bool = True, remote_name: str | None = None,
     ) -> tuple:
         """Upload a single file to AnythingLLM workspace
+
+        remote_name: nombre con el que se sube en el servidor; por defecto el
+        nombre calificado por carpeta ('Sub/informe.pdf' -> 'Sub__informe.pdf').
 
         Returns:
             tuple: (success: bool, skipped: bool, message: str)
@@ -589,7 +606,7 @@ class InfoHubFileManager:
             # Folder-qualified remote identity so same-stem files in different
             # subfolders don't collide (Sub/informe.pdf → Sub__informe.pdf).
             rel = self._rel_path(file_path, workspace_folder or file_path.parent)
-            remote = self._remote_name(rel)
+            remote = remote_name or self._remote_name(rel)
 
             # Auto-create workspace if missing + check file existence
             docs = self.get_workspace_documents(workspace_name)
@@ -1224,7 +1241,8 @@ def _main(page: ft.Page):
         threading.Thread(target=_do_login, daemon=True).start()
 
     sso_ticket = _query_param(page, "ticket")
-    if not sso_ticket:
+    # SPIKE driver.js: permite ver el panel sin InfoHub real. No usar en producción.
+    if not sso_ticket and os.getenv("TOUR_SPIKE_SKIP_LOGIN") != "1":
         page.show_dialog(login_dialog)
 
     # ========== STATE ==========
@@ -1364,7 +1382,7 @@ def _main(page: ft.Page):
         page.update()
 
     # --- Operation Cards ---
-    def create_operation_card(icon, title, description, on_click, color, badge_text=None):
+    def create_operation_card(icon, title, description, on_click, color, badge_text=None, tour_id=None):
         badge = None
         if badge_text:
             badge = ft.Container(
@@ -1374,8 +1392,7 @@ def _main(page: ft.Page):
                 padding=ft.padding.Padding.symmetric(horizontal=8, vertical=2),
             )
 
-        return T.card(
-            ft.Column(
+        body = ft.Column(
                 [
                     ft.Row(
                         [
@@ -1410,7 +1427,12 @@ def _main(page: ft.Page):
                 ],
                 spacing=10,
                 alignment=ft.MainAxisAlignment.START,
-            ),
+            )
+        if tour_id:
+            # Ancla DOM para el tutorial (driver.js, assets/tour/tour.js)
+            body = ft.Semantics(label=tour_id, container=True, content=body)
+        return T.card(
+            body,
             col={"xs": 12, "sm": 6, "md": 4, "lg": 4, "xl": 3},
         )
 
@@ -1896,11 +1918,15 @@ def _main(page: ft.Page):
                     show_snackbar("Estado actualizado", T.OK_DEEP),
                 ),
             ),
-            ft.IconButton(
-                icon=Icons.SETTINGS_OUTLINED,
-                icon_color=T.TEXT,
-                tooltip="Configuración",
-                on_click=open_config_editor,
+            ft.Semantics(
+                label="tour:config",
+                container=True,
+                content=ft.IconButton(
+                    icon=Icons.SETTINGS_OUTLINED,
+                    icon_color=T.TEXT,
+                    tooltip="Configuración",
+                    on_click=open_config_editor,
+                ),
             ),
         ],
     )
@@ -1935,6 +1961,7 @@ def _main(page: ft.Page):
                 "Previsualizar contenido de carpetas sin subir",
                 on_scan_files,
                 T.TEAL,
+                tour_id="tour:op-scan",
             ),
             create_operation_card(
                 Icons.IMAGE_OUTLINED,
@@ -2066,4 +2093,5 @@ if __name__ == "__main__":
         main,
         view=ft.AppView.WEB_BROWSER,
         port=int(os.getenv("APP_PORT", 8500)),
+        assets_dir=str(Path(BASE_DIR) / "assets"),
     )

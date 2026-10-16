@@ -151,6 +151,45 @@ http://localhost:8500
 
 ---
 
+## 🤖 Bot de sincronización automática (`sync_bot.py`)
+
+Versión headless del panel para cron: recorre `~/Documentos/Infohub/`, resuelve el
+workspace de cada subcarpeta y sube los archivos que faltan o cambiaron. Reutiliza
+el motor de `app.py` (`InfoHubFileManager`), sin la interfaz Flet.
+
+```bash
+./venv/bin/python sync_bot.py                    # corrida completa
+./venv/bin/python sync_bot.py --dry-run          # solo reporta
+./venv/bin/python sync_bot.py --carpetas "zoho-tickets" --sin-telegram
+./venv/bin/python sync_bot.py --sin-esperar-locks
+```
+
+Configuración: `sync_bot.json` (raíz, carpetas, alias de workspaces, exclusiones,
+límite de intentos, locks a esperar, resumen de Telegram). La conexión sale de
+`config.json` (o del `.env`).
+
+Comportamiento:
+
+- **No borra nada.** Los documentos que están en el servidor y ya no existen
+  localmente se listan como huérfanos en el resumen.
+- **Adopta lo que ya estaba en el servidor**: si un documento coincide por nombre
+  (con o sin carpeta) se registra como línea base en `logs/estado_sync.json` y no
+  se vuelve a subir; los cambios posteriores se detectan por sha256.
+- **Actualiza lo cambiado**: borra la copia remota exacta y sube la nueva con el
+  mismo nombre que tenía en el servidor.
+- **Identidad por nombre canónico completo**, no por prefijo (el matcher antiguo
+  daba por subido un `.zip` porque existía un `.pdf` con el mismo número).
+- **Extensiones no soportadas** (`.zip` por defecto) se ignoran y se reportan; los
+  fallos se reintentan hasta `max_intentos` (3) y luego se reportan como fallidos.
+- **Espera a los tres bots de normativa** (flock de `~/cr-*/logs/actualizar.lock`)
+  antes de empezar, hasta `espera_max_min` minutos.
+- **Resumen por Telegram** (mismo chat que los bots de normativa) y log en
+  `logs/sync_AAAAMMDD_HHMM.log`.
+
+Cron del usuario: domingos 06:30 (`crontab.txt` tiene la línea original).
+
+---
+
 ## 🖼️ Descripciones de Imágenes con IA
 
 Cuando activas `IMAGE_DESCRIPTION_ACTIVATE=true`, el programa:

@@ -1,0 +1,28 @@
+{
+  "root": "/home/jose/Documentos/Infohub",
+  "carpetas": [
+    "Tributación CR",
+    "Legislación Laboral CR",
+    "Legislación Seguros CR",
+    "blawd",
+    "odoo",
+    "zoho-tickets"
+  ],
+  "alias_workspaces": {
+    "odoo": "odoo17"
+  },
+  "excluir_sufijos": [".image_description", ".image_description.txt"],
+  "extensiones_ignoradas": [".zip"],
+  "max_intentos": 3,
+  "borrar_huerfanos": false,
+  "actualizar_cambiados": true,
+  "crear_workspaces": true,
+  "esperar_locks": [
+    "/home/jose/cr-tributario/logs/actualizar.lock",
+    "/home/jose/cr-laboral/logs/actualizar.lock",
+    "/home/jose/cr-seguros/logs/actualizar.lock"
+  ],
+  "espera_max_min": 240,
+  "telegram": true,
+  "estado": "logs/estado_sync.json"
+}
