@@ -19,7 +19,7 @@ from flet import Icons
 import ui_theme as T
 from dotenv import load_dotenv
 from config_manager import ConfigManager, DEFAULTS, BASE_DIR
-from workspace_map import WorkspaceResolver
+from workspace_map import WorkspaceResolver, slug_naive
 
 # Load environment variables
 # Anclado al dir del ejecutable, no al CWD: si no, doble click no lee el .env
@@ -101,8 +101,10 @@ class InfoHubFileManager:
             )
             self.watched_root = os.getenv("WATCHED_FOLDERS_ROOT", "")
             protected = os.getenv("PROTECTED_WORKSPACES") or PROTECTED_WORKSPACES_DEFAULT
+        # Ya son slugs: se normalizan con la regla local, sin consultar el servidor
+        # (el resolver todavía no existe y el constructor no debe hacer pedidos).
         self.protected_workspaces = {
-            self.get_workspace_slug(name.strip())
+            slug_naive(name.strip())
             for name in str(protected or "").split(",")
             if name.strip()
         }

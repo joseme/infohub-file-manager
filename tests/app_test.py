@@ -8,11 +8,18 @@ import pytest
 import requests
 
 from app import InfoHubFileManager
+from workspace_map import slug_naive
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _slug_local(mgr):
+    """Slug por la regla local, sin el GET /api/v1/workspaces del resolver: así cada
+    test ve solo los pedidos del método que prueba."""
+    return patch.object(mgr, "get_workspace_slug", side_effect=slug_naive)
 
 
 @pytest.fixture
@@ -43,7 +50,8 @@ def manager():
             })
             # Default for existing tests: treat all workspaces as accessible
             # so scan/sort/full-upload tests keep working without access-control noise.
-            with patch.object(mgr, "is_workspace_accessible", return_value=True):
+            with patch.object(mgr, "is_workspace_accessible", return_value=True), \
+                    _slug_local(mgr):
                 yield mgr
 
 
@@ -61,7 +69,7 @@ def real_access_manager():
         "WATCHED_FOLDERS_ROOT": "",
     }):
         with patch("requests.get", return_value=MagicMock(spec=requests.Response)):
-            yield InfoHubFileManager(config={
+            mgr = InfoHubFileManager(config={
                 "anythingllm_api_key": "test-api-key",
                 "anythingllm_base_url": "https://test.infohub.example.com",
                 "ollama_base_url": "http://localhost:11434",
@@ -69,6 +77,8 @@ def real_access_manager():
                 "image_description_active": True,
                 "watched_folders_root": "/test/watched",
             })
+            with _slug_local(mgr):
+                yield mgr
 
 
 @pytest.fixture
