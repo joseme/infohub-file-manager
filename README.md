@@ -18,9 +18,10 @@ Panel de control web para sincronizar archivos locales con **AnythingLLM / InfoH
 ## ⚠️ Con el InfoHub v1 (octubre de 2026)
 
 - **Planillas:** InfoHub carga cada hoja de un `.xlsx` como un documento aparte (`planilla.xlsx-<hoja>-<uuid>.json`). La limpieza las reconoce y no las borra mientras el archivo exista.
-- **Workspaces protegidos:** `protected_workspaces` (o `PROTECTED_WORKSPACES`) lista los workspaces que el file manager no sincroniza ni limpia, porque se cargan aparte. Por defecto, `tributacion` y `odoo17`, del piloto de Infohub Chat.
+- **Workspaces protegidos:** `protected_workspaces` (o `PROTECTED_WORKSPACES`) lista los workspaces que el file manager (y `sync_bot.py`, aunque lleguen por un alias como `odoo` -> `odoo17`) no sincroniza ni limpia, porque se cargan aparte. Por defecto, `tributacion` y `odoo17`, del piloto de Infohub Chat.
 - **Lotes:** los embeddings se mandan de a 10 documentos y el borrado de a 20, para que cada pedido termine antes del corte del proxy de producción (60 s). Tras un corte, se espera a que InfoHub termine en lugar de reenviar, porque reenviar duplica documentos.
 - **Borrado real:** la limpieza ahora borra con la ruta completa (`carpeta/archivo.json`). Antes, InfoHub respondía 200 sin borrar nada, así que la primera limpieza puede quitar huérfanos acumulados.
+- **Motor de embeddings:** InfoHub usa el embedder `builtin` (all-MiniLM, 384 dims, sin API externa). La intent previa con `generic-openai` apuntando a commandcode falló porque ese gateway no expone `/embeddings`; y OpenRouter (bge-m3, 1024 dims) quedó sin créditos. Al cambiar de motor se cambia la dimensión del vector: el índice LanceDB del workspace debe borrarse (carpeta `storage/lancedb/<slug>.lance`) y los documentos re-embederse desde el área (re-corrida del sync). El LLM de chat usa commandcode vía `GENERIC_OPEN_AI_*` con la key Anthropic del proveedor.
 - **Simular Limpieza:** el botón muestra, por workspace, qué documentos borraría y qué archivos subiría la carga completa, sin cambiar nada en InfoHub. La lista completa queda en el log. Úsalo antes de cada carga completa contra producción.
 
 ## 🚀 Requisitos
@@ -170,6 +171,7 @@ el motor de `app.py` (`InfoHubFileManager`), sin la interfaz Flet.
 ./venv/bin/python sync_bot.py --dry-run          # solo reporta
 ./venv/bin/python sync_bot.py --carpetas "zoho-tickets" --sin-telegram
 ./venv/bin/python sync_bot.py --sin-esperar-locks
+./venv/bin/python sync_bot.py --borrar-huerfanos # también borra los huérfanos
 ```
 
 Configuración: `sync_bot.json` (raíz, carpetas, alias de workspaces, exclusiones,
@@ -178,8 +180,10 @@ límite de intentos, locks a esperar, resumen de Telegram). La conexión sale de
 
 Comportamiento:
 
-- **No borra nada.** Los documentos que están en el servidor y ya no existen
-  localmente se listan como huérfanos en el resumen.
+- **Por defecto no borra nada.** Los documentos que están en el servidor y ya no
+  existen localmente se listan como huérfanos en el resumen. Con
+  `"borrar_huerfanos": true` en `sync_bot.json` (o el flag `--borrar-huerfanos`
+  en la corrida) los borra del workspace, en lotes tolerantes a cortes del proxy.
 - **Adopta lo que ya estaba en el servidor**: si un documento coincide por nombre
   (con o sin carpeta) se registra como línea base en `logs/estado_sync.json` y no
   se vuelve a subir; los cambios posteriores se detectan por sha256.
@@ -194,7 +198,9 @@ Comportamiento:
 - **Resumen por Telegram** (mismo chat que los bots de normativa) y log en
   `logs/sync_AAAAMMDD_HHMM.log`.
 
-Cron del usuario: domingos 06:30 (`crontab.txt` tiene la línea original).
+Cron del usuario: domingos 06:30 la corrida de subida y 07:30 la corrida posterior
+con `--borrar-huerfanos` (limpia documentos que quedaron en el workspace tras una
+reorganización de carpetas). `crontab.txt` tiene la línea original.
 
 ---
 

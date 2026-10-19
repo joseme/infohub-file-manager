@@ -12,3 +12,7 @@ MAILTO=""
 # corriendo, sync_bot.py espera a que suelte su lock (log en logs/).
 30 6 * * 0 cd /home/jose/desarrollo/infohub_file_manager && ./venv/bin/python sync_bot.py >> logs/cron.log 2>&1
 MAILTO=""
+# Corrida posterior de sync_bot: borra huérfanos (documentos del workspace
+# sin equivalente local) tras la corrida de subida del domingo 06:30.
+30 7 * * 0 cd /home/jose/desarrollo/infohub_file_manager && ./venv/bin/python sync_bot.py --borrar-huerfanos >> logs/cron.log 2>&1
+MAILTO=""

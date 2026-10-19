@@ -2,8 +2,11 @@
   "root": "/home/jose/Documentos/Infohub",
   "carpetas": [
     "Tributación CR",
+    "Guias Hacienda CR",
+    "Jurisprudencia Tributaria CR",
     "Legislación Laboral CR",
     "Legislación Seguros CR",
+    "Jurisprudencia Seguros CR",
     "blawd",
     "odoo",
     "zoho-tickets"

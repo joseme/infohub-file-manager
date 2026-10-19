@@ -3,9 +3,9 @@
 
 Lee las subcarpetas de ~/Documentos/Infohub/ (configurables en sync_bot.json) y
 sube a su workspace de InfoHub los archivos que faltan o que cambiaron desde la
-última corrida. NO borra nada: los documentos que están en el servidor y ya no
-existen en la carpeta local se reportan como huérfanos (para eso está
-"borrar_huerfanos": false en sync_bot.json).
+última corrida. Con "borrar_huerfanos": true en sync_bot.json (o --borrar-
+huerfanos en la corrida) también borra del workspace los documentos que ya no
+tienen equivalente en la carpeta local.
 
 El workspace destino se resuelve contra el servidor por nombre real
 (workspace_map.WorkspaceResolver), usando alias locales como odoo -> odoo17.
@@ -203,6 +203,13 @@ def sincronizar_carpeta(mgr: InfoHubFileManager, resolver: WorkspaceResolver, ca
 
     slug, existe = resolver.slug(nombre)
     res["slug"], res["existe"] = slug, existe
+    # workspaces protegidos (protected_workspaces en config.json o PROTECTED_WORKSPACES):
+    # se cargan fuera del file manager, así que no se sube ni se borra nada.
+    # Se compara el slug ya resuelto, para que un alias (odoo -> odoo17) no los esquive.
+    if slug in mgr.protected_workspaces or mgr.is_protected(nombre):
+        res["protegido"] = True
+        log.info("Workspace '%s' (%s) protegido: se omite", nombre, slug)
+        return res
     if not existe:
         if not bot_cfg["crear_workspaces"] or dry:
             res["errores"].append(f"workspace no existe y crear_workspaces={bot_cfg['crear_workspaces']}")
@@ -214,6 +221,7 @@ def sincronizar_carpeta(mgr: InfoHubFileManager, resolver: WorkspaceResolver, ca
         slug, res["slug"], res["creado"] = nuevo, nuevo, True
         existe = True
         log.info("Workspace creado para '%s': %s", nombre, slug)
+        resolver.refresh()  # indexa el workspace nuevo antes de la corrida
 
     # alcance del usuario/API key (si aplica)
     if not mgr.get_accessible_workspace_names([nombre]):
@@ -302,11 +310,26 @@ def sincronizar_carpeta(mgr: InfoHubFileManager, resolver: WorkspaceResolver, ca
             res["errores"].append(f"{rel}: {msg}")
             estado_ws[remoto] = {"sha": sha, "size": st.st_size, "intentos": intentos_previos + 1}
 
-    # huérfanos: en el servidor y sin equivalente local (solo se reportan)
+    # huérfanos: en el servidor y sin equivalente local
     locales_remotos = {mgr._remote_name(rel) for rel in locales}
     huerfanos = [b for b in remotos
                  if not any(coincide_remoto(b, n) for n in locales_remotos)]
     res["huerfanos"] = sorted(huerfanos)
+
+    # borrado de huérfanos (solo con borrar_huerfanos=True en sync_bot.json o
+    # --borrar-huerfanos; el borrado usa el docpath completo como en app.py)
+    if res["huerfanos"] and bot_cfg.get("borrar_huerfanos"):
+        if dry:
+            log.info("[dry-run] Se borrarían %d huérfanos de '%s': %s",
+                     len(res["huerfanos"]), nombre, res["huerfanos"])
+        else:
+            docpaths = [doc_names[b] for b in res["huerfanos"]
+                        if b in doc_names and doc_names[b]]
+            log.info("Borrando %d huérfanos de '%s'", len(docpaths), nombre)
+            ok, cnt, errs = mgr.delete_documents(docpaths)
+            res["borrados"] = cnt
+            if not ok:
+                res["errores"].append(f"borrado de huérfanos: {errs[:3]}")
 
     if not dry:
         subido_algo = res["subidos"] or res["actualizados"]
@@ -324,11 +347,16 @@ def main() -> int:
     ap.add_argument("--sin-esperar-locks", action="store_true")
     ap.add_argument("--sin-actualizar", action="store_true", help="no reemplazar archivos cambiados")
     ap.add_argument("--max-subidas", type=int, default=0, help="máximo de subidas en esta corrida (0 = sin límite)")
+    ap.add_argument("--borrar-huerfanos", action="store_true",
+                    help="borrar del workspace los documentos sin equivalente local "
+                         "(ignora sync_bot.json; p.ej. tras una corrida que reorganizó carpetas)")
     args = ap.parse_args()
 
     bot_cfg = cargar_bot_config()
     if args.sin_actualizar:
         bot_cfg["actualizar_cambiados"] = False
+    if args.borrar_huerfanos:
+        bot_cfg["borrar_huerfanos"] = True
 
     LOGS.mkdir(exist_ok=True)
     log_p = LOGS / f"sync_{datetime.datetime.now():%Y%m%d_%H%M}.log"
@@ -391,8 +419,14 @@ def main() -> int:
             r = sincronizar_carpeta(mgr, resolver, carpeta, bot_cfg, estado, args.dry_run,
                                     args.max_subidas, restantes)
         except Exception as e:
+            # una caída de red no debe desincronizar el resolver: recarga el
+            # índice de workspaces del servidor para la siguiente carpeta
+            try:
+                resolver.refresh()
+            except Exception:
+                pass
             r = {"carpeta": nombre, "errores": [f"excepción: {e}"], "locales": 0, "subidos": 0,
-                 "actualizados": 0, "omitidos": 0, "huerfanos": [], "slug": None}
+                 "actualizados": 0, "omitidos": 0, "huerfanos": [], "borrados": 0, "slug": None}
         r["seg"] = round(time.time() - t0)
         errores += len(r.get("errores", []))
         resultados.append(r)
@@ -414,6 +448,9 @@ def main() -> int:
     lineas = [f"Sincronización InfoHub — {inicio:%Y-%m-%d %H:%M}"
               + (" (dry-run)" if args.dry_run else "")]
     for r in resultados:
+        if r.get("protegido"):
+            lineas.append(f"- {r['carpeta']} ({r['slug']}): protegido, omitido")
+            continue
         det = f"{r['locales']} locales, {r['subidos']} subidos, {r['actualizados']} actualizados"
         if r.get("adoptados"):
             det += f", {r['adoptados']} ya existían"
@@ -426,6 +463,8 @@ def main() -> int:
             det += f", {len(r['fallidos'])} fallidos persistentes"
         if r.get("huerfanos"):
             det += f", {len(r['huerfanos'])} huérfanos"
+        if r.get("borrados"):
+            det += f", {r['borrados']} borrados"
         if r.get("errores"):
             det += f", {len(r['errores'])} errores: {'; '.join(r['errores'][:3])}"
         lineas.append(f"- {r['carpeta']} ({r.get('slug') or 'sin workspace'}): {det} ({r['seg']//60} min)")
