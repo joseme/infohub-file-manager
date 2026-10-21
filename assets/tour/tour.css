@@ -20,6 +20,11 @@
   padding: 18px;
 }
 
+/* driver.css pone su propia fuente en todo el popover (.driver-popover *). */
+.driver-popover.infohub-tour * {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+
 .driver-popover.infohub-tour .driver-popover-title {
   font-family: "Space Grotesk", system-ui, sans-serif;
   font-size: 17px;
