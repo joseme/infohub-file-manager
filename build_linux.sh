@@ -10,6 +10,9 @@ pip install --upgrade pip
 pip install -r requirements.txt pyinstaller
 pyinstaller build.spec --clean
 chmod +x dist/infohub-file-manager
+# El ejecutable sirve assets/ desde su propia carpeta (BASE_DIR en config_manager.py)
+rm -rf dist/assets
+cp -r assets dist/assets
 echo ""
 echo "Build OK: dist/infohub-file-manager"
 echo "Run with: ./dist/infohub-file-manager"

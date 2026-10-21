@@ -1443,8 +1443,7 @@ def _main(page: ft.Page):
         threading.Thread(target=_do_login, daemon=True).start()
 
     sso_ticket = _query_param(page, "ticket")
-    # SPIKE driver.js: permite ver el panel sin InfoHub real. No usar en producción.
-    if not sso_ticket and os.getenv("TOUR_SPIKE_SKIP_LOGIN") != "1":
+    if not sso_ticket:
         page.show_dialog(login_dialog)
 
     # ========== STATE ==========
@@ -1567,7 +1566,16 @@ def _main(page: ft.Page):
     status_bar = ft.Container(
         content=ft.Row(
             [
-                ft.Row([status_indicator, status_text], spacing=8),
+                ft.Semantics(
+                    label="tour:status",
+                    container=True,
+                    # Con el texto en su propio nodo, el ancla no es una hoja y Flutter
+                    # la expone en aria-label (en una hoja la pone como texto).
+                    content=ft.Row(
+                        [status_indicator, ft.Semantics(container=True, content=status_text)],
+                        spacing=8,
+                    ),
+                ),
                 progress_ring,
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -1630,13 +1638,12 @@ def _main(page: ft.Page):
                 spacing=10,
                 alignment=ft.MainAxisAlignment.START,
             )
-        if tour_id:
-            # Ancla DOM para el tutorial (driver.js, assets/tour/tour.js)
-            body = ft.Semantics(label=tour_id, container=True, content=body)
-        return T.card(
-            body,
-            col={"xs": 12, "sm": 6, "md": 4, "lg": 4, "xl": 3},
-        )
+        col = {"xs": 12, "sm": 6, "md": 4, "lg": 4, "xl": 3}
+        if not tour_id:
+            return T.card(body, col=col)
+        # Ancla DOM para el recorrido (driver.js, assets/tour/tour.js): envuelve la
+        # tarjeta entera para que el resaltado cubra también su borde.
+        return ft.Semantics(label=tour_id, container=True, content=T.card(body), col=col)
 
     # --- Logs Panel ---
     logs_list = ft.ListView(
@@ -2148,11 +2155,15 @@ def _main(page: ft.Page):
         actions=[
             *(
                 [
-                    ft.IconButton(
-                        icon=Icons.HOME_OUTLINED,
-                        icon_color=T.TEXT,
-                        tooltip="Volver al inicio de InfoHub",
-                        on_click=lambda e: go_to_portal(),
+                    ft.Semantics(
+                        label="tour:home",
+                        container=True,
+                        content=ft.IconButton(
+                            icon=Icons.HOME_OUTLINED,
+                            icon_color=T.TEXT,
+                            tooltip="Volver al inicio de InfoHub",
+                            on_click=lambda e: go_to_portal(),
+                        ),
                     )
                 ]
                 if PORTAL_URL
@@ -2177,6 +2188,16 @@ def _main(page: ft.Page):
                     on_click=open_config_editor,
                 ),
             ),
+            # Sin acción en Python: assets/tour/tour.js abre el recorrido con el clic.
+            ft.Semantics(
+                label="tour:help",
+                container=True,
+                content=ft.IconButton(
+                    icon=Icons.HELP_OUTLINE,
+                    icon_color=T.TEXT,
+                    tooltip="Ver recorrido",
+                ),
+            ),
         ],
     )
 
@@ -2189,6 +2210,7 @@ def _main(page: ft.Page):
                 "Sincronizacion completa: subir, actualizar y eliminar documentos huerfanos",
                 on_full_upload,
                 T.TEAL,
+                tour_id="tour:op-full",
             ),
             create_operation_card(
                 Icons.FIND_IN_PAGE_OUTLINED,
@@ -2196,6 +2218,7 @@ def _main(page: ft.Page):
                 "Ver qué borraría y qué subiría la carga completa, sin cambiar nada",
                 on_simulate_clean,
                 T.ACCENT_HOVER,
+                tour_id="tour:op-simulate",
             ),
             create_operation_card(
                 Icons.SYNC_OUTLINED,
@@ -2225,6 +2248,7 @@ def _main(page: ft.Page):
                 "Generar descripciones con IA para imagenes sin descripcion",
                 on_create_image_descriptions,
                 T.WARN,
+                tour_id="tour:op-images",
             ),
         ],
         spacing=16,
@@ -2271,15 +2295,19 @@ def _main(page: ft.Page):
             [
                 # Stats Row
                 ft.Container(
-                    content=ft.ResponsiveRow(
-                        [
-                            workspaces_stat,
-                            files_stat,
-                            uploaded_stat,
-                            pending_stat,
-                        ],
-                        spacing=16,
-                        run_spacing=16,
+                    content=ft.Semantics(
+                        label="tour:stats",
+                        container=True,
+                        content=ft.ResponsiveRow(
+                            [
+                                workspaces_stat,
+                                files_stat,
+                                uploaded_stat,
+                                pending_stat,
+                            ],
+                            spacing=16,
+                            run_spacing=16,
+                        ),
                     ),
                     padding=ft.padding.Padding.only(bottom=16),
                 ),
@@ -2309,7 +2337,7 @@ def _main(page: ft.Page):
                 ft.ResponsiveRow(
                     [
                         ft.Container(
-                            content=logs_panel,
+                            content=ft.Semantics(label="tour:logs", container=True, content=logs_panel),
                             col={"xs": 12, "sm": 12, "md": 8, "lg": 8, "xl": 8},
                         ),
                     ],

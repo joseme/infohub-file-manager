@@ -47,6 +47,9 @@ No necesitas ser programador para activar las actualizaciones. Puedes usar la in
 **Cómo acceder:**
 Abre tu navegador y ve a: `http://localhost:8000`
 
+### Recorrido guiado
+La primera vez que abres el panel, un recorrido te muestra cada parte en pocos pasos. Puedes cerrarlo cuando quieras y verlo otra vez con el botón **?** de la barra superior. El navegador recuerda que ya lo viste; en otro navegador o en una ventana privada aparece de nuevo.
+
 ### ¿Qué hacen los botones?
 *   **📤 Full Upload and Cleaning (Subida completa y limpieza)**: Este es el botón de "Hacer todo". Escanea tus carpetas, sube archivos nuevos, actualiza los cambiados y elimina los archivos que hayas borrado de tu computadora.
 *   **🗂️ Sort Files (Ordenar archivos)**: Organiza automáticamente tus documentos en las carpetas correctas según su espacio de trabajo.

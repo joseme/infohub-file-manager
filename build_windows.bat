@@ -33,6 +33,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem El ejecutable sirve assets\ desde su propia carpeta (BASE_DIR en config_manager.py)
+if exist "dist\assets" rmdir /s /q "dist\assets"
+xcopy /e /i /q assets "dist\assets" >nul
+
 echo.
 echo Build OK: dist\infohub-file-manager.exe
 echo Run with: dist\infohub-file-manager.exe
