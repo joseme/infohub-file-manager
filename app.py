@@ -4,6 +4,7 @@ Panel de control para sincronizar archivos con AnythingLLM/InfoHub
 """
 
 import os
+import asyncio
 import base64
 import logging
 import re
@@ -57,6 +58,8 @@ DELETE_TIMEOUT_SECONDS = 120
 # los documentos aparezcan registrados antes de reenviar (reenviar duplica filas).
 EMBEDDINGS_POLL_SECONDS = 15
 EMBEDDINGS_WAIT_SECONDS = 300
+# Espera máxima a que Flutter confirme el cierre del login antes de abrir otro modal.
+LOGIN_DISMISS_WAIT_SECONDS = 2
 
 
 def _query_param(page: ft.Page, key: str) -> str:
@@ -1376,16 +1379,51 @@ def _main(page: ft.Page):
         except Exception:
             return False
 
-    def _after_login(username: str, base_url: str):
+    # La lista de workspaces se abre recién cuando Flutter confirma que cerró el
+    # login: dos modales encimados durante la animación de cierre dejan el login
+    # pegado en pantalla.
+    pending_workspaces = {"show": False}
+
+    def _show_pending_workspaces(e=None):
+        if pending_workspaces["show"]:
+            pending_workspaces["show"] = False
+            _show_user_workspaces()
+
+    login_dialog.on_dismiss = _show_pending_workspaces
+
+    def _after_login(username: str, base_url: str, close_login: bool = False):
+        """Corre en un hilo: valida la API key y deja la UI al bucle de Flet."""
+        api_ok = bool(manager.api_key) and _validate_credentials(base_url, manager.api_key)
+        page.run_task(_finish_login, username, api_ok, close_login)
+
+    async def _finish_login(username: str, api_ok: bool, close_login: bool):
+        # Los diálogos se tocan solo desde el bucle de la sesión: desde un hilo
+        # el parche open=False del login puede perderse y el modal no se cierra.
         show_snackbar(f"Sesión iniciada como {username}", T.OK_DEEP)
         add_log(
             f"Login exitoso (usuario: {username}) - Workspaces habilitados: {len(manager.allowed_workspaces or {})}",
             "success",
         )
-        if not manager.api_key or not _validate_credentials(base_url, manager.api_key):
+        if not api_ok:
             show_snackbar("API Key InfoHub ausente o inválida en config.json: la sincronización fallará hasta configurarla", T.DANGER)
             add_log("Advertencia: API Key InfoHub ausente o inválida. Configúrala en Ajustes para poder sincronizar.", "warning")
-        _show_user_workspaces()
+        if not close_login:
+            _show_user_workspaces()
+            return
+        login_error.value = ""
+        login_progress.visible = False
+        pending_workspaces["show"] = True
+        page.pop_dialog()
+        await asyncio.sleep(LOGIN_DISMISS_WAIT_SECONDS)
+        _show_pending_workspaces()  # Flutter no confirmó el cierre a tiempo
+
+    async def _show_login_error(message: str, reopen: bool = False):
+        login_error.value = message
+        login_progress.visible = False
+        if reopen:
+            page.show_dialog(login_dialog)
+        else:
+            page.update()
 
     def _handle_ticket_login(ticket: str):
         """SSO desde el portal: sin ticket válido se cae al diálogo de login."""
@@ -1396,8 +1434,11 @@ def _main(page: ft.Page):
                 _after_login(username or "usuario", manager.base_url)
             else:
                 add_log(f"Inicio de sesión desde el portal falló: {msg}", "warning")
-                login_error.value = "No se pudo iniciar sesión desde el portal (enlace vencido o usado). Ingresá tus credenciales."
-                page.show_dialog(login_dialog)
+                page.run_task(
+                    _show_login_error,
+                    "No se pudo iniciar sesión desde el portal (enlace vencido o usado). Ingresá tus credenciales.",
+                    True,
+                )
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -1424,21 +1465,14 @@ def _main(page: ft.Page):
                 manager.base_url = base_url
                 ok, msg = manager.login(username, password)
                 if not ok:
-                    login_error.value = msg or "Credenciales inválidas"
-                    login_progress.visible = False
-                    page.update()
+                    page.run_task(_show_login_error, msg or "Credenciales inválidas")
                     return
 
                 config.set("anythingllm_base_url", base_url)
                 config.save()
-                login_error.value = ""
-                login_progress.visible = False
-                page.pop_dialog()
-                _after_login(username, base_url)
+                _after_login(username, base_url, close_login=True)
             except Exception as ex:
-                login_error.value = f"Error: {ex}"
-                login_progress.visible = False
-                page.update()
+                page.run_task(_show_login_error, f"Error: {ex}")
 
         threading.Thread(target=_do_login, daemon=True).start()
 
