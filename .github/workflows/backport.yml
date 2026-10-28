@@ -69,6 +69,17 @@ jobs:
           url=$(gh pr create --base "$TARGET" --head "$branch" \
             --title "[business] $PR_TITLE" \
             --body "Backport de #$PR a \`$TARGET\`.")
-          # Los eventos creados con GITHUB_TOKEN no disparan otros workflows.
-          gh workflow run pruebas.yml --ref "$branch"
-          gh pr comment "$PR" --body "Backport a \`$TARGET\`: $url"
+          # El PR del bot dispara Pruebas, pero la ejecución queda esperando
+          # aprobación (action_required): se aprueba aquí.
+          run=""
+          for _ in $(seq 1 12); do
+            run=$(gh run list --workflow pruebas.yml --branch "$branch" --event pull_request \
+              --json databaseId,conclusion -q '.[] | select(.conclusion == "action_required") | .databaseId' | head -n 1)
+            [ -n "$run" ] && break
+            sleep 5
+          done
+          note=""
+          if [ -z "$run" ] || ! gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$run/approve"; then
+            note=" Las pruebas quedaron esperando aprobación: en el PR, «Approve workflows to run»."
+          fi
+          gh pr comment "$PR" --body "Backport a \`$TARGET\`: $url.$note"
