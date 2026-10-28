@@ -13,7 +13,11 @@ COPY requirements.txt ./
 # Versiones fijas: Flet 1.x no es compatible con la app, y flet-web 0.85 con FastAPI 0.156
 RUN pip install --no-cache-dir -r requirements.txt flet-web==0.85.2 fastapi==0.136.3
 
-COPY --chown=infohub:infohub app.py config_manager.py ui_theme.py workspace_map.py ./
+COPY --chown=infohub:infohub app.py config_manager.py ui_theme.py workspace_map.py edition.py ./
+# Edición: business (por defecto) se construye sin ee/; enterprise lo incluye.
+ARG INFOHUB_EDITION=business
+COPY --chown=infohub:infohub ee ./ee
+RUN if [ "$INFOHUB_EDITION" != "enterprise" ]; then rm -rf ee; fi
 COPY --chown=infohub:infohub assets ./assets
 
 RUN chown -R infohub:infohub /app
