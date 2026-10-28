@@ -33,4 +33,7 @@ jobs:
           cache: pip
 
       - run: pip install -r requirements.txt
+      # Como la imagen Business: sin ee/ (la app debe funcionar igual).
+      - run: rm -rf ee
+        if: matrix.edition == 'business'
       - run: python -m pytest -q

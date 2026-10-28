@@ -21,6 +21,7 @@ import ui_theme as T
 from dotenv import load_dotenv
 from config_manager import ConfigManager, DEFAULTS, BASE_DIR
 from workspace_map import WorkspaceResolver, slug_naive
+import edition
 
 # Load environment variables
 # Anclado al dir del ejecutable, no al CWD: si no, doble click no lee el .env
@@ -2398,9 +2399,14 @@ def _main(page: ft.Page):
         )
     )
 
+    # Enterprise: lo de ee/ solo con InfoHub Enterprise (la imagen Business no lo trae).
+    current_edition = edition.fetch_edition(manager.base_url, manager.api_key, timeout=5)
+    if edition.is_enterprise(current_edition):
+        edition.ee.register(page, manager)
+
     # Initial log
     add_log("Sistema iniciado correctamente", "success")
-    add_log(f"Conectado a: {manager.base_url}", "info")
+    add_log(f"Conectado a: {manager.base_url} (edición {current_edition})", "info")
 
     if sso_ticket:
         _handle_ticket_login(sso_ticket)
