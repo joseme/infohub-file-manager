@@ -1,6 +1,6 @@
 # Merge-forward: cada cambio en release/** (correcciones de Business) se pasa a la
 # rama principal con un PR release → principal que se fusiona solo cuando las
-# pruebas pasan. Si hay conflicto, el PR queda abierto: crear una rama desde la
+# pruebas del push a release pasan. Si hay conflicto, el PR queda abierto: crear una rama desde la
 # principal, fusionar ahí la de release, resolver y abrir un PR con esa rama.
 name: Merge-forward
 
@@ -15,7 +15,6 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
-  actions: write
 
 jobs:
   merge-forward:
@@ -44,7 +43,6 @@ jobs:
             pr=$(gh pr list --base "$BASE" --head "$SRC" --state open --json number -q '.[0].number')
           fi
 
-          # Los eventos creados con GITHUB_TOKEN no disparan otros workflows:
-          # se lanzan las pruebas a mano sobre la cabeza del PR.
-          gh workflow run pruebas.yml --ref "$SRC"
+          # Las pruebas que cuentan son las del push a $SRC (lo hace quien fusiona
+          # en release). No lanzarlas aquí: cancelarían esa ejecución.
           gh pr merge "$pr" --auto --merge
