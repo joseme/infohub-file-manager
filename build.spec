@@ -19,7 +19,7 @@ a = Analysis(
     hiddenimports=hiddenimports + ["dotenv", "requests"],
     hookspath=[],
     runtime_hooks=[],
-    excludes=["pytest", "tkinter", "unittest", "IPython", "matplotlib", "numpy", "scipy", "pandas"],
+    excludes=["pytest", "unittest", "IPython", "matplotlib", "numpy", "scipy", "pandas"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

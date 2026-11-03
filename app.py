@@ -22,6 +22,8 @@ from dotenv import load_dotenv
 from config_manager import ConfigManager, DEFAULTS, BASE_DIR
 from workspace_map import WorkspaceResolver, slug_naive
 import features
+import demo_mode
+from demo_mode import DemoSync
 
 # Load environment variables
 # Anclado al dir del ejecutable, no al CWD: si no, doble click no lee el .env
@@ -1393,11 +1395,16 @@ def _main(page: ft.Page):
     login_dialog.on_dismiss = _show_pending_workspaces
 
     def _after_login(username: str, base_url: str, close_login: bool = False):
-        """Corre en un hilo: valida la API key y deja la UI al bucle de Flet."""
-        api_ok = bool(manager.api_key) and _validate_credentials(base_url, manager.api_key)
-        page.run_task(_finish_login, username, api_ok, close_login)
+        """Corre en un hilo: valida la API key y deja la UI al bucle de Flet.
 
-    async def _finish_login(username: str, api_ok: bool, close_login: bool):
+        Un usuario de demo de InfoHub entra en modo demo: trabaja solo con su
+        sesión y no necesita la API key.
+        """
+        demo = DemoSync(base_url, manager.session_token, manager).fetch() if manager.session_token else None
+        api_ok = demo is not None or (bool(manager.api_key) and _validate_credentials(base_url, manager.api_key))
+        page.run_task(_finish_login, username, api_ok, close_login, demo)
+
+    async def _finish_login(username: str, api_ok: bool, close_login: bool, demo: dict | None = None):
         # Los diálogos se tocan solo desde el bucle de la sesión: desde un hilo
         # el parche open=False del login puede perderse y el modal no se cierra.
         show_snackbar(f"Sesión iniciada como {username}", T.OK_DEEP)
@@ -1405,6 +1412,13 @@ def _main(page: ft.Page):
             f"Login exitoso (usuario: {username}) - Workspaces habilitados: {len(manager.allowed_workspaces or {})}",
             "success",
         )
+        if demo:
+            enter_demo_mode(demo)
+            if close_login:
+                login_error.value = ""
+                login_progress.visible = False
+                page.pop_dialog()
+            return
         if not api_ok:
             show_snackbar("API Key InfoHub ausente o inválida en config.json: la sincronización fallará hasta configurarla", T.DANGER)
             add_log("Advertencia: API Key InfoHub ausente o inválida. Configúrala en Ajustes para poder sincronizar.", "warning")
@@ -1880,7 +1894,8 @@ def _main(page: ft.Page):
         """Qué haría la carga completa: huérfanos que se borrarían y archivos que se subirían."""
         if result.get("status") != "success":
             return
-        explorer_dialog.title = ft.Text("Simulación de limpieza", color=T.TEXT)
+        titulo = "Simulación de la sincronización" if demo_state["demo"] else "Simulación de limpieza"
+        explorer_dialog.title = ft.Text(titulo, color=T.TEXT)
 
         def lista(titulo, nombres, color, limite):
             if not nombres:
@@ -1905,6 +1920,11 @@ def _main(page: ft.Page):
                             ),
                             lista("Se borrarían", data.get("huerfanos", []), T.WARN, 20),
                             lista("Se subirían", data.get("a_subir", []), T.TEAL, 10),
+                            *(
+                                [lista("No entran en el cupo", data["sin_cupo"], T.DANGER, 10)]
+                                if data.get("sin_cupo")
+                                else []
+                            ),
                         ],
                         spacing=6,
                     ),
@@ -2126,8 +2146,10 @@ def _main(page: ft.Page):
                             update_stats(result)
                             if name == "Escanear Archivos":
                                 show_workspaces(result)
-                            elif name == "Simular Limpieza":
+                            elif name in ("Simular Limpieza", "Simular sincronización"):
                                 show_simulation(result)
+                            if name in DEMO_OPERATIONS:
+                                refresh_demo()
                     except Exception as ex:
                         log_operation(name, {"status": "error", "message": str(ex)}, show_progress)
 
@@ -2179,7 +2201,177 @@ def _main(page: ft.Page):
         show_progress=True,
     )
 
+    # ========== MODO DEMO ==========
+    # Un prospecto de una demo de InfoHub (demo_mode.py): elige una carpeta,
+    # el panel crea una subcarpeta por workspace y «Sincronizar» sube y quita.
+    demo_state = {"demo": None, "sync": None}
+    DEMO_OPERATIONS = ("Sincronizar", "Simular sincronización")
+
+    demo_title = ft.Text("", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT)
+    demo_quota = ft.Text("", size=13, color=T.TEXT_2)
+    demo_folder = T.textfield(
+        label="Carpeta de la demo",
+        value=config.get("demo_folder", ""),
+        dense=True,
+        expand=True,
+        text_size=13,
+        hint_text="Elegí una carpeta o escribí su ruta",
+        on_submit=lambda e: use_demo_folder(demo_folder.value),
+    )
+    demo_workspaces = ft.Column(spacing=6)
+
+    def demo_folder_path() -> str:
+        return (demo_folder.value or "").strip()
+
+    def render_demo(demo: dict):
+        demo_state["demo"] = demo
+        days = demo_mode.days_left(demo.get("expiresAt"))
+        demo_title.value = f"Tu demo de {demo.get('company', '')}"
+        demo_quota.value = (
+            f"{'Vence hoy' if days == 0 else 'Queda 1 día' if days == 1 else f'Quedan {days} días'} · "
+            f"Documentos: {demo['usedDocs']} de {demo['maxDocs']} · "
+            f"Espacio: {demo_mode.format_mb(demo['usedBytes'])} de {demo_mode.format_mb(demo['maxBytes'])}"
+        )
+        workspaces_stat.content.content.controls[1].controls[0].value = str(len(demo.get("workspaces", [])))
+        demo_workspaces.controls = [
+            ft.Row(
+                [
+                    ft.Icon(Icons.FOLDER_OUTLINED, color=T.ACCENT_HOVER, size=18),
+                    ft.Text(w["name"], size=14, weight=ft.FontWeight.W_500, color=T.TEXT, expand=True),
+                    ft.Text(
+                        f"{len(w['documents'])} {'documento' if len(w['documents']) == 1 else 'documentos'} en InfoHub",
+                        size=12,
+                        color=T.TEXT_2,
+                    ),
+                ],
+                spacing=8,
+            )
+            for w in demo.get("workspaces", [])
+        ]
+
+    def refresh_demo():
+        """Corre en un hilo: vuelve a leer la demo (cuota y documentos)."""
+        sync = demo_state["sync"]
+        demo = sync.fetch() if sync else None
+        if demo:
+            render_demo(demo)
+            page.update()
+
+    def use_demo_folder(path: str):
+        path = (path or "").strip()
+        demo = demo_state["demo"]
+        if not path or not demo:
+            return
+        try:
+            folders = demo_state["sync"].ensure_folders(path, demo)
+        except Exception as ex:
+            show_snackbar(f"No se pudo usar esa carpeta: {ex}", T.DANGER_DEEP)
+            return
+        demo_folder.value = path
+        config.set("demo_folder", path)
+        config.save()
+        render_demo(demo)
+        add_log(f"Carpeta de la demo: {path}. Subcarpetas: {', '.join(f.name for f in folders)}", "success")
+        show_snackbar("Listo: copiá tus documentos en las subcarpetas y sincronizá", T.OK_DEEP)
+        page.update()
+
+    def choose_demo_folder(e=None):
+        def _pick():
+            path = demo_mode.choose_folder(demo_folder_path())
+            if path:
+                use_demo_folder(path)
+            elif path is None:  # sin selector; "" es que se canceló
+                show_snackbar("Si no se abrió el selector, escribí la ruta de la carpeta y presioná Enter", T.WARN_DEEP)
+
+        threading.Thread(target=_pick, daemon=True).start()
+
+    on_demo_sync = wrap_operation(
+        "Sincronizar",
+        lambda: demo_state["sync"].sync(demo_folder_path()),
+        confirm=True,
+        dialog_title="Sincronizar",
+        dialog_msg="Se subirán los archivos nuevos de tus subcarpetas y se quitarán de InfoHub los que borraste. ¿Continuar?",
+        show_progress=True,
+    )
+    on_demo_simulate = wrap_operation(
+        "Simular sincronización",
+        lambda: demo_state["sync"].simulate(demo_folder_path()),
+    )
+
+    demo_section = ft.Container(
+        content=T.card(
+            ft.Column(
+                [
+                    demo_title,
+                    demo_quota,
+                    ft.Text(
+                        "1. Elegí una carpeta de tu equipo: se crea una subcarpeta por workspace. "
+                        "2. Copiá cada documento en la subcarpeta que le corresponda. "
+                        "3. Sincronizá. Para quitar un documento, borralo de la carpeta y volvé a sincronizar.",
+                        size=13,
+                        color=T.TEXT_2,
+                    ),
+                    ft.Row(
+                        [
+                            demo_folder,
+                            ft.OutlinedButton("Elegir carpeta", icon=Icons.FOLDER_OPEN_OUTLINED, on_click=choose_demo_folder),
+                        ],
+                        spacing=8,
+                    ),
+                    demo_workspaces,
+                    ft.Row(
+                        [
+                            T.primary_button("Sincronizar", Icons.CLOUD_SYNC_OUTLINED, on_demo_sync),
+                            ft.OutlinedButton("Simular", icon=Icons.FIND_IN_PAGE_OUTLINED, on_click=on_demo_simulate),
+                        ],
+                        spacing=8,
+                    ),
+                ],
+                spacing=12,
+            )
+        ),
+        padding=ft.padding.Padding.only(bottom=16),
+        visible=False,
+    )
+
+    def enter_demo_mode(demo: dict):
+        """Muestra el panel de la demo en lugar de las operaciones de administración."""
+        demo_state["sync"] = DemoSync(manager.base_url, manager.session_token, manager)
+        manager.image_description_active = False
+        render_demo(demo)
+        demo_section.visible = True
+        operations_section.visible = False
+        # Sin configuración ni recorrido: no aplican a la demo, y el recorrido
+        # espera el botón de configuración para empezar, así que no se abre solo.
+        config_button.visible = False
+        help_button.visible = False
+        add_log(f"Modo demo: {len(demo.get('workspaces', []))} workspaces de {demo.get('company', '')}", "info")
+        if demo_folder_path():
+            use_demo_folder(demo_folder_path())
+        page.update()
+
     # ========== BUILD UI ==========
+
+    config_button = ft.Semantics(
+        label="tour:config",
+        container=True,
+        content=ft.IconButton(
+            icon=Icons.SETTINGS_OUTLINED,
+            icon_color=T.TEXT,
+            tooltip="Configuración",
+            on_click=open_config_editor,
+        ),
+    )
+    # Sin acción en Python: assets/tour/tour.js abre el recorrido con el clic.
+    help_button = ft.Semantics(
+        label="tour:help",
+        container=True,
+        content=ft.IconButton(
+            icon=Icons.HELP_OUTLINE,
+            icon_color=T.TEXT,
+            tooltip="Ver recorrido",
+        ),
+    )
 
     # AppBar
     app_bar = ft.AppBar(
@@ -2213,26 +2405,8 @@ def _main(page: ft.Page):
                     show_snackbar("Estado actualizado", T.OK_DEEP),
                 ),
             ),
-            ft.Semantics(
-                label="tour:config",
-                container=True,
-                content=ft.IconButton(
-                    icon=Icons.SETTINGS_OUTLINED,
-                    icon_color=T.TEXT,
-                    tooltip="Configuración",
-                    on_click=open_config_editor,
-                ),
-            ),
-            # Sin acción en Python: assets/tour/tour.js abre el recorrido con el clic.
-            ft.Semantics(
-                label="tour:help",
-                container=True,
-                content=ft.IconButton(
-                    icon=Icons.HELP_OUTLINE,
-                    icon_color=T.TEXT,
-                    tooltip="Ver recorrido",
-                ),
-            ),
+            config_button,
+            help_button,
         ],
     )
 
@@ -2346,8 +2520,10 @@ def _main(page: ft.Page):
                     ),
                     padding=ft.padding.Padding.only(bottom=16),
                 ),
+                # Demo (modo demo, oculta para el resto)
+                demo_section,
                 # Operations Section
-                ft.Container(
+                operations_section := ft.Container(
                     content=ft.Column(
                         [
                             ft.Row(
@@ -2399,8 +2575,11 @@ def _main(page: ft.Page):
         )
     )
 
-    # Funciones opcionales que activa la licencia de InfoHub (features.py).
-    current_features = features.fetch_features(manager.base_url, manager.api_key, timeout=5)
+    # Funciones opcionales que activa la licencia de InfoHub (features.py). Sin
+    # API key (p. ej. un prospecto de una demo) no hay a quién preguntar.
+    current_features = (
+        features.fetch_features(manager.base_url, manager.api_key, timeout=5) if manager.api_key else []
+    )
 
     # Initial log
     add_log("Sistema iniciado correctamente", "success")
