@@ -14,6 +14,7 @@ La cuota es una sola para toda la demo. InfoHub la vuelve a comprobar (413).
 """
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,19 @@ REQUEST_TIMEOUT_SECONDS = 20
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # Archivos del sistema o temporales de Office que no son documentos.
 _IGNORED_NAMES = {"thumbs.db", "desktop.ini"}
+
+
+# En la versión web (Docker) el panel corre en el servidor: «la carpeta del
+# prospecto» sería una carpeta del servidor. Ahí el modo demo se apaga.
+DEMO_DESKTOP_ONLY = (
+    "Las demos se cargan con el File Manager de escritorio, que trabaja con las "
+    "carpetas de tu equipo. Descargalo desde «Mi demo» en InfoHub Chat."
+)
+
+
+def demo_mode_enabled() -> bool:
+    """False si DEMO_MODE=0 (lo fija la imagen Docker)."""
+    return os.getenv("DEMO_MODE", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def folder_name(workspace_name: str) -> str:
