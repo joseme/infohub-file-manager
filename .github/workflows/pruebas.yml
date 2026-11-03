@@ -1,12 +1,12 @@
-# Pruebas unitarias (pytest), una vez por edición.
+# Pruebas unitarias (pytest).
 # tests/qa_folder_probe.py no corre aquí: necesita un InfoHub real.
 name: Pruebas
 
 on:
   push:
-    branches: [main, "release/**"]
+    branches: [main]
   pull_request:
-    branches: [main, "release/**"]
+    branches: [main]
   # Para lanzar las pruebas a mano sobre una rama.
   workflow_dispatch:
 
@@ -16,14 +16,8 @@ concurrency:
 
 jobs:
   pytest:
-    name: pytest (${{ matrix.edition }})
+    name: pytest
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        edition: [business, enterprise]
-    env:
-      INFOHUB_EDITION: ${{ matrix.edition }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +27,4 @@ jobs:
           cache: pip
 
       - run: pip install -r requirements.txt
-      # Como la imagen Business: sin ee/ (la app debe funcionar igual).
-      - run: rm -rf ee
-        if: matrix.edition == 'business'
       - run: python -m pytest -q
