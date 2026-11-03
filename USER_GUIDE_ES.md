@@ -59,6 +59,21 @@ La primera vez que abres el panel, un recorrido te muestra cada parte en pocos p
 
 ---
 
+## 🎯 Modo demo (prospectos de InfoHub)
+Si te dieron una demo de InfoHub, el File Manager es la forma de cargar tus documentos. Después los consultás en InfoHub Chat.
+
+1. **Iniciá sesión** con la URL de InfoHub, el usuario y la contraseña de tu demo. Están en «Mi demo», dentro de InfoHub Chat. No hace falta API key: el panel detecta la demo y muestra solo lo que necesitás.
+2. **Elegí una carpeta** de tu equipo con «Elegir carpeta». Si el selector no se abre, escribí la ruta y presioná Enter. Dentro se crea una subcarpeta por cada workspace de tu demo, por ejemplo «Contratos», «Normativa y jurisprudencia» y «Expedientes».
+3. **Copiá tus documentos** en la subcarpeta que corresponda. Dentro de cada una podés armar subcarpetas.
+4. **Sincronizá.** Se suben los archivos nuevos y se quitan de InfoHub los que borraste de la carpeta, así recuperás su espacio. «Simular» muestra antes qué va a pasar, sin cambiar nada.
+
+**Para tener en cuenta:**
+- El cupo de documentos y megas es uno solo para toda la demo. Lo que no entra se informa y no se sube.
+- Cambiar un archivo con el mismo nombre no lo vuelve a subir. Para reemplazarlo, borralo, sincronizá y volvé a copiarlo.
+- La carpeta elegida queda guardada para la próxima vez.
+
+---
+
 ## 🖼️ Descripciones de Imágenes por IA (La parte mágica)
 Cuando subes una imagen, el programa usa **Ollama Cloud** para "mirar" la imagen y escribir una descripción textual de ella.
 
