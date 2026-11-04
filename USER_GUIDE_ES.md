@@ -71,6 +71,7 @@ Si te dieron una demo de InfoHub, el File Manager es la forma de cargar tus docu
 - El cupo de documentos y megas es uno solo para toda la demo. Lo que no entra se informa y no se sube.
 - Cambiar un archivo con el mismo nombre no lo vuelve a subir. Para reemplazarlo, borralo, sincronizá y volvé a copiarlo.
 - La carpeta elegida queda guardada para la próxima vez.
+- El modo demo funciona solo en la versión de escritorio. La versión web (Docker) corre en el servidor y rechaza a los usuarios de demo.
 
 ---
 

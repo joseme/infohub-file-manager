@@ -6,7 +6,7 @@ import pytest
 import requests
 
 from app import InfoHubFileManager
-from demo_mode import DemoSync, folder_name, format_mb, is_document
+from demo_mode import DemoSync, demo_mode_enabled, folder_name, format_mb, is_document
 
 BASE = "https://demo.infohub.example.com"
 MB = 1024 * 1024
@@ -73,6 +73,16 @@ def test_nombre_de_carpeta_valido_en_windows():
     assert folder_name("Catálogo y precios") == "Catálogo y precios"
     assert folder_name('Ventas: "2026"/Q1') == "Ventas- -2026--Q1"
     assert folder_name(" . ") == "workspace"
+
+
+def test_el_modo_demo_se_apaga_en_la_version_web(monkeypatch):
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    assert demo_mode_enabled()
+    for value in ("0", "false", "OFF"):
+        monkeypatch.setenv("DEMO_MODE", value)
+        assert not demo_mode_enabled()
+    monkeypatch.setenv("DEMO_MODE", "1")
+    assert demo_mode_enabled()
 
 
 def test_tamanos_legibles():

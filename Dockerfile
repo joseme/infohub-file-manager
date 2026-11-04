@@ -20,8 +20,11 @@ RUN chown -R infohub:infohub /app
 
 USER infohub
 
+# DEMO_MODE=0: en el servidor no hay «carpeta del prospecto»; las demos se
+# cargan con el File Manager de escritorio (demo_mode.py).
 ENV APP_PORT=8500 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DEMO_MODE=0
 
 EXPOSE 8500
 

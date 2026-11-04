@@ -1401,6 +1401,13 @@ def _main(page: ft.Page):
         sesión y no necesita la API key.
         """
         demo = DemoSync(base_url, manager.session_token, manager).fetch() if manager.session_token else None
+        if demo and not demo_mode.demo_mode_enabled():
+            # Versión web: un prospecto no opera sobre carpetas del servidor.
+            manager.session_token = ""
+            manager.allowed_workspaces = None
+            logger.warning(f"Usuario de demo rechazado en la versión web: {username}")
+            page.run_task(_show_login_error, demo_mode.DEMO_DESKTOP_ONLY, not close_login)
+            return
         api_ok = demo is not None or (bool(manager.api_key) and _validate_credentials(base_url, manager.api_key))
         page.run_task(_finish_login, username, api_ok, close_login, demo)
 
