@@ -1,6 +1,6 @@
 """
-Tokens de diseño de InfoHub File Manager según el manual de marca KnowHub v1.0
-(octubre 2026). Interfaz de producto: blanco/crema + tinta, acento violeta InfoHub,
+Tokens de diseño de InfoHub File Manager según el manual de marca KnowHub 2026
+(v1.0, octubre 2026). Interfaz de producto: blanco/lavanda + tinta, acento violeta InfoHub,
 índigo solo para la firma «by KnowHub». Misma paleta que InfoHub Chat y DMS
 (~/desarrollo/knowhub_assets/marca/marca.css).
 """
@@ -9,17 +9,17 @@ import flet as ft
 
 # Marca (manual pág. 03)
 TINTA = "#14152E"
-CREMA = "#FBF6E3"
+LAVANDA = "#E9E9FB"     # neutro de marca (reemplaza al crema)
 INDIGO = "#4B4FC4"
 VIOLETA = "#7B61FF"          # símbolo, foco, indicadores
 VIOLETA_OSC = "#5A42D6"      # botones con texto blanco (6,6:1) y textos de acento
 VIOLETA_VELO = "#EFEBFF"
 
 # Superficies
-BG_PRIMARY = CREMA       # fondo de la app
+BG_PRIMARY = LAVANDA     # fondo de la app
 BG_SECONDARY = "#FFFFFF"  # tarjetas / paneles
 BG_INPUT = "#FFFFFF"      # campos
-BG_POPUP = TINTA          # snackbars (texto crema)
+BG_POPUP = TINTA          # snackbars (texto lavanda)
 BG_CONTAINER = "#FFFFFF"
 
 # Acento
@@ -27,20 +27,20 @@ ACCENT = VIOLETA_OSC
 ACCENT_HOVER = VIOLETA_OSC  # íconos y textos de acento sobre fondo claro
 ACCENT_DEEP = "#4A33BD"
 ACCENT_SOFT = "#A695FF"
-ACCENT_DIM = "#F2EBD1"      # botones secundarios
+ACCENT_DIM = "#DEDEF8"      # botones secundarios
 ACCENT_WASH = VIOLETA_VELO  # chips / hover
 ON_ACCENT = "#FFFFFF"       # texto e íconos sobre ACCENT y colores de estado
 
 # Texto
 TEXT = TINTA
 TEXT_2 = "#5A5B70"
-TEXT_3 = "#7A7B8C"
+TEXT_3 = "#66677B"          # 4,6:1 sobre lavanda; nada más claro para texto
 PLACEHOLDER = "#8E8FA0"
-ON_POPUP = CREMA
+ON_POPUP = LAVANDA
 
 # Líneas
-BORDER = "#E3DCC0"
-BORDER_STRONG = "#C9C7BB"
+BORDER = "#D4D4F6"
+BORDER_STRONG = "#C5C6D4"
 
 # Estados (texto sobre claro con contraste AA; *_DEEP como fondo con texto blanco)
 OK = "#127A4A"
