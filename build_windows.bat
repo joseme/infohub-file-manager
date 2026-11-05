@@ -21,7 +21,9 @@ if errorlevel 1 (
 )
 
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt pyinstaller
+rem Mismas versiones fijas que el Dockerfile: sin flet-web el ejecutable no arranca
+rem y flet-web 0.85 no funciona con FastAPI 0.156 o posterior.
+python -m pip install -r requirements.txt flet-web==0.85.2 fastapi==0.136.3 pyinstaller
 if errorlevel 1 (
     echo ERROR: fallo la instalacion de dependencias.
     exit /b 1
