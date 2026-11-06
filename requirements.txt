@@ -1,4 +1,8 @@
+# flet y flet-web deben ir siempre a la misma version
 flet==0.85.2
+flet-web==0.85.2
+# flet-web 0.85 usa openapi_prefix, eliminado en FastAPI 0.156+: no subir de 0.155
+fastapi==0.136.3
 python-dotenv>=1.0.0
 requests>=2.31.0
 pytest>=8.0.0

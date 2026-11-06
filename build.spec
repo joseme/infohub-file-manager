@@ -3,13 +3,10 @@ from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hiddenimports = [], [], []
 for pkg in ("flet", "flet_web"):
-    try:
-        d, b, h = collect_all(pkg)
-        datas += d
-        binaries += b
-        hiddenimports += h
-    except Exception:
-        pass
+    d, b, h = collect_all(pkg)
+    datas += d
+    binaries += b
+    hiddenimports += h
 
 a = Analysis(
     ["app.py"],
