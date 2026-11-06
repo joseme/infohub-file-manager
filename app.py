@@ -34,7 +34,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(os.getenv("LOG_FILE", "infohub.log")),
+        logging.FileHandler(os.getenv("LOG_FILE") or str(BASE_DIR / "infohub.log")),
         logging.StreamHandler(),
     ],
 )
@@ -1481,11 +1481,13 @@ def _main(page: ft.Page):
         login_error.value = ""
         login_progress.visible = True
         page.update()
+        logger.info(f"Intento de login: {base_url} (usuario: {username})")
 
         def _do_login():
             try:
                 manager.base_url = base_url
                 ok, msg = manager.login(username, password)
+                logger.info(f"Resultado de login en {base_url}: ok={ok} mensaje={msg}")
                 if not ok:
                     page.run_task(_show_login_error, msg or "Credenciales inválidas")
                     return
@@ -1494,6 +1496,7 @@ def _main(page: ft.Page):
                 config.save()
                 _after_login(username, base_url, close_login=True)
             except Exception as ex:
+                logger.exception(f"Error inesperado en login: {ex}")
                 page.run_task(_show_login_error, f"Error: {ex}")
 
         threading.Thread(target=_do_login, daemon=True).start()
