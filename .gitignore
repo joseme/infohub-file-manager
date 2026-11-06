@@ -6,8 +6,9 @@ __pycache__/
 .env
 infohub.log
 *.egg-info/
-dist/
 build/
+# dist/ se versiona (exe, zip y assets de la version actual); config.json y *.log siguen ignorados
+dist/infohub-file-manager-1.2.0-windows-x86_64.zip
 .idea/
 .vscode/
 *.bak
