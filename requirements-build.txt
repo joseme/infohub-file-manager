@@ -1,0 +1,3 @@
+-r requirements.txt
+# Fijado: una version mayor de PyInstaller puede romper build.spec
+pyinstaller==6.22.3
