@@ -18,6 +18,9 @@
   "extensiones_ignoradas": [".zip"],
   "max_intentos": 3,
   "borrar_huerfanos": false,
+  "umbral_borrado_pct": 50,
+  "minimo_borrado": 10,
+  "montajes_requeridos": [],
   "actualizar_cambiados": true,
   "crear_workspaces": true,
   "esperar_locks": [

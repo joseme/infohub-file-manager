@@ -172,6 +172,7 @@ el motor de `app.py` (`InfoHubFileManager`), sin la interfaz Flet.
 ./venv/bin/python sync_bot.py --carpetas "zoho-tickets" --sin-telegram
 ./venv/bin/python sync_bot.py --sin-esperar-locks
 ./venv/bin/python sync_bot.py --borrar-huerfanos # también borra los huérfanos
+./venv/bin/python sync_bot.py --borrar-huerfanos --forzar-borrado  # salta las guardas (ver abajo)
 ```
 
 Configuración: `sync_bot.json` (raíz, carpetas, alias de workspaces, exclusiones,
@@ -184,6 +185,21 @@ Comportamiento:
   existen localmente se listan como huérfanos en el resumen. Con
   `"borrar_huerfanos": true` en `sync_bot.json` (o el flag `--borrar-huerfanos`
   en la corrida) los borra del workspace, en lotes tolerantes a cortes del proxy.
+- **Guardas contra borrados masivos** (`sync_guards.py`, también en la carga
+  completa del panel). El borrado de huérfanos de un workspace se **bloquea** (y
+  se avisa en el resumen y por Telegram con `⚠ BORRADO BLOQUEADO`) si:
+  - la carpeta local está vacía (montaje caído, disco desconectado);
+  - se borraría más de `umbral_borrado_pct` (50 %) de los documentos del
+    workspace y son más de `minimo_borrado` (10);
+  - la carpeta está en `montajes_requeridos` y no está montada (`os.path.ismount`).
+
+  Una reorganización legítima dentro del mismo workspace no se bloquea (la
+  corrida sube primero lo nuevo). Si se movió una carpeta entera a otro
+  workspace, revisar con `--dry-run` y repetir con `--forzar-borrado`, que salta
+  las dos primeras guardas pero nunca la de montaje. En el panel, los mismos
+  parámetros se leen de `config.json`. Lo subido por fuentes externas
+  (`logs/estado_fuentes.json`) nunca cuenta como huérfano. Montaje de carpetas de
+  red: `docs/guia_montaje_smb.md`.
 - **Adopta lo que ya estaba en el servidor**: si un documento coincide por nombre
   (con o sin carpeta) se registra como línea base en `logs/estado_sync.json` y no
   se vuelve a subir; los cambios posteriores se detectan por sha256.

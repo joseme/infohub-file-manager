@@ -1,0 +1,33 @@
+DOCUMENTO DE ANALISIS Y DISEÑO: FUENTE SHAREPOINT
+
+Objetivo: Permitir que InfoHub File Manager sincronice documentos alojados en carpetas especificas de SharePoint Online hacia los workspaces correspondientes en InfoHub.
+
+1. CONFIGURACION NECESARIA (Azure Portal)
+
+Para la autenticacion «App-Only» se requiere:
+- «Tenant ID»: ID del inquilino de Microsoft 365.
+- «Client ID»: ID de la aplicacion registrada en Entra ID.
+- «Client Secret»: Clave secreta generada para la aplicacion.
+- Permisos: 'Files.Read.All' y 'Sites.Read.All' (Application permissions).
+
+2. IMPACTO EN EL MODELO DE DATOS
+
+Se deben añadir los siguientes campos en 'config.json':
+- 'sharepoint_enabled': bool.
+- 'sharepoint_tenant_id': string.
+- 'sharepoint_client_id': string.
+- 'sharepoint_client_secret': string.
+- 'sharepoint_site_url': string (ej. «https://tenant.sharepoint.com/sites/NombreSitio»).
+- 'sharepoint_folder_path': string (ej. «/Documentos Compartidos/General/Infohub»).
+
+3. LOGICA DE SINCRONIZACION
+
+- Identificacion: SharePoint asigna un 'eTag' o 'cTag' y un 'id' unico a cada archivo. Se utilizara el 'id' como clave principal en 'estado_sync.json'.
+- Descarga: A diferencia del sistema local, los archivos de SharePoint deben descargarse a un directorio temporal ('BASE_DIR / .temp') antes de llamar a 'upload_file_to_workspace'.
+- Mapeo: Las subcarpetas dentro de la 'sharepoint_folder_path' se mapearan a workspaces siguiendo la misma logica que las carpetas locales (ej. carpeta «Odoo» -> workspace «odoo17»).
+
+4. PASOS DE IMPLEMENTACION
+
+- Crear 'sharepoint_client.py': Clase encargada de obtener el token via OAuth2 (Client Credentials Flow) y listar archivos recursivamente.
+- Modificar 'ConfigManager': Añadir los nuevos campos al esquema de validacion y a la UI de Flet en 'app.py'.
+- Integrar en el ciclo de 'scan_files': Si SharePoint esta activo, el scanner debe concatenar los resultados de la API de Graph con los del escaneo local de 'watched_folders_root'.

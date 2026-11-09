@@ -21,6 +21,11 @@ corriendo (flock de logs/actualizar.lock) el bot espera.
     ./venv/bin/python sync_bot.py --carpetas "zoho-tickets" --sin-telegram
     ./venv/bin/python sync_bot.py --max-subidas 50   # limita por corrida
     ./venv/bin/python sync_bot.py --sin-esperar-locks
+    ./venv/bin/python sync_bot.py --borrar-huerfanos --forzar-borrado
+
+El borrado de huérfanos pasa por las guardas de sync_guards.py: no borra si la
+carpeta está vacía, si se iría más de umbral_borrado_pct % del workspace o si
+una carpeta de montajes_requeridos no está montada.
 
 Log en logs/sync_AAAAMMDD_HHMM.log, estado en logs/estado_sync.json (sha256 de
 cada archivo ya subido) y resumen por Telegram (token en ~/.hermes/.env, chat
@@ -47,6 +52,7 @@ sys.path.insert(0, str(BASE))
 from config_manager import ConfigManager          # noqa: E402
 from app import InfoHubFileManager                # noqa: E402
 from workspace_map import WorkspaceResolver, canonical   # noqa: E402
+import sync_guards                                # noqa: E402
 
 LOGS = BASE / "logs"
 CONFIG_BOT = BASE / "sync_bot.json"
@@ -59,6 +65,12 @@ DEFAULTS_BOT = {
     "extensiones_ignoradas": [".zip"],
     "max_intentos": 3,
     "borrar_huerfanos": False,
+    # guardas del borrado de huérfanos (sync_guards.py): no borrar si la carpeta
+    # está vacía o si se iría más del umbral % del workspace (con un mínimo
+    # absoluto); las carpetas en montajes_requeridos deben estar montadas.
+    "umbral_borrado_pct": sync_guards.UMBRAL_PCT_DEFECTO,
+    "minimo_borrado": sync_guards.MINIMO_DEFECTO,
+    "montajes_requeridos": [],
     "actualizar_cambiados": True,
     "crear_workspaces": True,
     "esperar_locks": [],
@@ -192,8 +204,26 @@ def esperar_locks(rutas: list, max_min: int) -> float:
 
 # --- sincronización ----------------------------------------------------------
 
+def motivo_bloqueo_borrado(carpeta: pathlib.Path, locales: int, remotos: int, huerfanos: int,
+                           bot_cfg: dict):
+    """Motivo para no borrar huérfanos de esta carpeta, o None si se puede borrar.
+
+    El montaje caído bloquea siempre; las guardas de vacío/proporción se pueden
+    saltar con --forzar-borrado (p. ej. tras reorganizar un workspace entero).
+    """
+    if sync_guards.montaje_caido(carpeta, bot_cfg.get("montajes_requeridos")):
+        return "la carpeta está en montajes_requeridos y no está montada"
+    if bot_cfg.get("forzar_borrado"):
+        return None
+    return sync_guards.evaluar_borrado(
+        locales, remotos, huerfanos,
+        umbral_pct=bot_cfg.get("umbral_borrado_pct", sync_guards.UMBRAL_PCT_DEFECTO),
+        minimo=bot_cfg.get("minimo_borrado", sync_guards.MINIMO_DEFECTO))
+
+
 def sincronizar_carpeta(mgr: InfoHubFileManager, resolver: WorkspaceResolver, carpeta: pathlib.Path,
-                        bot_cfg: dict, estado: dict, dry: bool, max_subidas: int, restantes: list) -> dict:
+                        bot_cfg: dict, estado: dict, dry: bool, max_subidas: int, restantes: list,
+                        estado_fuentes: dict = None) -> dict:
     """Sincroniza una carpeta local con su workspace. Devuelve el resumen."""
     nombre = carpeta.name
     excl = tuple(bot_cfg["excluir_sufijos"])
@@ -314,12 +344,18 @@ def sincronizar_carpeta(mgr: InfoHubFileManager, resolver: WorkspaceResolver, ca
     locales_remotos = {mgr._remote_name(rel) for rel in locales}
     huerfanos = [b for b in remotos
                  if not any(coincide_remoto(b, n) for n in locales_remotos)]
-    res["huerfanos"] = sorted(huerfanos)
+    # lo subido por fuentes externas (SharePoint, Zoho...) no tiene copia local
+    externos = sync_guards.nombres_externos(slug, estado_fuentes or {})
+    res["huerfanos"] = sorted(sync_guards.quitar_externos(huerfanos, externos, coincide_remoto))
 
     # borrado de huérfanos (solo con borrar_huerfanos=True en sync_bot.json o
     # --borrar-huerfanos; el borrado usa el docpath completo como en app.py)
     if res["huerfanos"] and bot_cfg.get("borrar_huerfanos"):
-        if dry:
+        motivo = motivo_bloqueo_borrado(carpeta, len(locales), len(remotos), len(res["huerfanos"]), bot_cfg)
+        if motivo:
+            res["borrado_bloqueado"] = motivo
+            log.warning("Borrado de huérfanos BLOQUEADO en '%s': %s", nombre, motivo)
+        elif dry:
             log.info("[dry-run] Se borrarían %d huérfanos de '%s': %s",
                      len(res["huerfanos"]), nombre, res["huerfanos"])
         else:
@@ -350,6 +386,9 @@ def main() -> int:
     ap.add_argument("--borrar-huerfanos", action="store_true",
                     help="borrar del workspace los documentos sin equivalente local "
                          "(ignora sync_bot.json; p.ej. tras una corrida que reorganizó carpetas)")
+    ap.add_argument("--forzar-borrado", action="store_true",
+                    help="con --borrar-huerfanos, salta las guardas de carpeta vacía y de umbral "
+                         "(no la de montaje caído); usar solo tras revisar un --dry-run")
     args = ap.parse_args()
 
     bot_cfg = cargar_bot_config()
@@ -357,6 +396,8 @@ def main() -> int:
         bot_cfg["actualizar_cambiados"] = False
     if args.borrar_huerfanos:
         bot_cfg["borrar_huerfanos"] = True
+    if args.forzar_borrado:
+        bot_cfg["forzar_borrado"] = True
 
     LOGS.mkdir(exist_ok=True)
     log_p = LOGS / f"sync_{datetime.datetime.now():%Y%m%d_%H%M}.log"
@@ -389,8 +430,9 @@ def main() -> int:
     resolver = WorkspaceResolver(mgr.base_url, mgr.api_key, aliases=bot_cfg.get("alias_workspaces"))
 
     root = pathlib.Path(bot_cfg["root"])
-    if not root.is_dir():
-        print(f"Error: no existe la carpeta raíz {root}")
+    problema = sync_guards.raiz_accesible(root)
+    if problema:
+        print(f"Error: {problema}")
         return 2
 
     if args.carpetas:
@@ -406,6 +448,8 @@ def main() -> int:
     except (FileNotFoundError, ValueError):
         estado = {}
 
+    estado_fuentes = sync_guards.cargar_estado_fuentes()
+
     restantes = [args.max_subidas or 10 ** 9]
     resultados, errores = [], 0
     for nombre in nombres:
@@ -417,7 +461,7 @@ def main() -> int:
         t0 = time.time()
         try:
             r = sincronizar_carpeta(mgr, resolver, carpeta, bot_cfg, estado, args.dry_run,
-                                    args.max_subidas, restantes)
+                                    args.max_subidas, restantes, estado_fuentes)
         except Exception as e:
             # una caída de red no debe desincronizar el resolver: recarga el
             # índice de workspaces del servidor para la siguiente carpeta
@@ -428,13 +472,15 @@ def main() -> int:
             r = {"carpeta": nombre, "errores": [f"excepción: {e}"], "locales": 0, "subidos": 0,
                  "actualizados": 0, "omitidos": 0, "huerfanos": [], "borrados": 0, "slug": None}
         r["seg"] = round(time.time() - t0)
-        errores += len(r.get("errores", []))
+        errores += len(r.get("errores", [])) + (1 if r.get("borrado_bloqueado") else 0)
         resultados.append(r)
         log.info("    slug=%s locales=%s subidos=%s actualizados=%s omitidos=%s huérfanos=%s errores=%s (%ss)",
                  r.get("slug"), r.get("locales"), r.get("subidos"), r.get("actualizados"),
                  r.get("omitidos"), len(r.get("huerfanos", [])), len(r.get("errores", [])), r["seg"])
         for e in r.get("errores", []):
             log.warning("    ERR %s: %s", nombre, e)
+        if r.get("borrado_bloqueado"):
+            log.warning("    BLQ %s: borrado de huérfanos bloqueado: %s", nombre, r["borrado_bloqueado"])
         for rel in r.get("ignorados", []):
             log.info("    IGN %s: extensión excluida", rel)
         for rel in r.get("fallidos", []):
@@ -465,6 +511,8 @@ def main() -> int:
             det += f", {len(r['huerfanos'])} huérfanos"
         if r.get("borrados"):
             det += f", {r['borrados']} borrados"
+        if r.get("borrado_bloqueado"):
+            det += f", ⚠ BORRADO BLOQUEADO: {r['borrado_bloqueado']}"
         if r.get("errores"):
             det += f", {len(r['errores'])} errores: {'; '.join(r['errores'][:3])}"
         lineas.append(f"- {r['carpeta']} ({r.get('slug') or 'sin workspace'}): {det} ({r['seg']//60} min)")

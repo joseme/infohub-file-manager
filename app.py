@@ -21,6 +21,7 @@ import ui_theme as T
 from dotenv import load_dotenv
 from config_manager import ConfigManager, DEFAULTS, BASE_DIR
 from workspace_map import WorkspaceResolver, slug_naive
+import sync_guards
 import features
 import demo_mode
 from demo_mode import DemoSync
@@ -114,6 +115,13 @@ class InfoHubFileManager:
             for name in str(protected or "").split(",")
             if name.strip()
         }
+
+        # Guardas del borrado de huérfanos (sync_guards.py). No están en el
+        # diálogo de configuración: se ajustan a mano en config.json.
+        cfg = config or {}
+        self.umbral_borrado_pct = cfg.get("umbral_borrado_pct", sync_guards.UMBRAL_PCT_DEFECTO)
+        self.minimo_borrado = cfg.get("minimo_borrado", sync_guards.MINIMO_DEFECTO)
+        self.montajes_requeridos = cfg.get("montajes_requeridos", []) or []
 
         # Cache within a single operation to avoid duplicate server lookups
         # for the same workspace and to remember docpaths already uploaded.
@@ -898,6 +906,14 @@ class InfoHubFileManager:
         sin cambiar nada en InfoHub."""
         return self.full_upload_and_clean(simular=True)
 
+    def _motivo_bloqueo_borrado(self, carpeta, locales: int, remotos: int, huerfanos: int):
+        """Motivo para no borrar los huérfanos de un workspace, o None (ver sync_guards)."""
+        if sync_guards.montaje_caido(carpeta, self.montajes_requeridos):
+            return "la carpeta está en montajes_requeridos y no está montada"
+        return sync_guards.evaluar_borrado(locales, remotos, huerfanos,
+                                           umbral_pct=self.umbral_borrado_pct,
+                                           minimo=self.minimo_borrado)
+
     def full_upload_and_clean(self, simular: bool = False) -> dict:
         """Full synchronization: upload new/updated files, delete removed ones.
 
@@ -927,6 +943,11 @@ class InfoHubFileManager:
             delete_errors = []
             workspaces_processed = 0
             plan = {}
+            problema = sync_guards.raiz_accesible(root_path)
+            if problema:
+                return {"status": "error", "message": problema}
+            estado_fuentes = sync_guards.cargar_estado_fuentes()
+            bloqueados = {}
 
             # Deduplicate workspaces by name across parent dirs
             workspaces_by_name = {}
@@ -986,8 +1007,8 @@ class InfoHubFileManager:
                 if collection_failed:
                     orphaned = []
                 else:
-                    orphaned = [
-                        doc_names_map[b]
+                    huerfanos_base = [
+                        b
                         for b in remote_base_names
                         if b in doc_names_map
                         and not any(
@@ -995,6 +1016,22 @@ class InfoHubFileManager:
                             for n in local_remote_names
                         )
                     ]
+                    # lo subido por fuentes externas (SharePoint, Zoho...) no tiene copia local
+                    if huerfanos_base and estado_fuentes:
+                        externos = sync_guards.nombres_externos(
+                            self.get_workspace_slug(workspace_name), estado_fuentes)
+                        huerfanos_base = sync_guards.quitar_externos(
+                            huerfanos_base, externos, self._remote_base_matches)
+                    orphaned = [doc_names_map[b] for b in huerfanos_base]
+
+                bloqueo = None
+                if orphaned:
+                    bloqueo = self._motivo_bloqueo_borrado(
+                        workspace_folder, len(archivos), len(remote_base_names), len(orphaned))
+                    if bloqueo:
+                        bloqueados[workspace_name] = bloqueo
+                        logger.warning(
+                            f"Borrado de huérfanos BLOQUEADO en '{workspace_name}': {bloqueo}")
 
                 if simular:
                     a_subir = sorted(
@@ -1006,12 +1043,14 @@ class InfoHubFileManager:
                         "huerfanos": sorted(orphaned),
                         "a_subir": a_subir,
                         "sin_lista_local": collection_failed,
+                        "borrado_bloqueado": bloqueo,
                     }
-                    for doc_name in orphaned:
-                        logger.info(f"[simulación] Se borraría de '{workspace_name}': {doc_name}")
+                    if not bloqueo:
+                        for doc_name in orphaned:
+                            logger.info(f"[simulación] Se borraría de '{workspace_name}': {doc_name}")
                     continue
 
-                if orphaned:
+                if orphaned and not bloqueo:
                     logger.info(
                         f"Orphaned documents in '{workspace_name}': {orphaned}"
                     )
@@ -1039,9 +1078,10 @@ class InfoHubFileManager:
                 self._update_embeddings(workspace_name)
 
             if simular:
-                borrarian = sum(len(p["huerfanos"]) for p in plan.values())
+                permitidos = [p for p in plan.values() if not p.get("borrado_bloqueado")]
+                borrarian = sum(len(p["huerfanos"]) for p in permitidos)
                 subirian = sum(len(p["a_subir"]) for p in plan.values())
-                con_huerfanos = sum(1 for p in plan.values() if p["huerfanos"])
+                con_huerfanos = sum(1 for p in permitidos if p["huerfanos"])
                 message = (
                     f"Simulación, no se cambió nada: se borrarían {borrarian} documentos huérfanos "
                     f"en {con_huerfanos} workspaces y se subirían {subirian} archivos "
@@ -1049,9 +1089,13 @@ class InfoHubFileManager:
                 )
                 if protegidos:
                     message += f" Protegidos, sin tocar: {', '.join(protegidos)}."
+                if bloqueados:
+                    message += (f" Borrado bloqueado por seguridad en {len(bloqueados)} "
+                                f"workspaces: {', '.join(bloqueados)}.")
                 return {
                     "status": "success",
                     "message": message,
+                    "blocked_deletions": bloqueados,
                     "simulation": plan,
                     "would_delete": borrarian,
                     "would_upload": subirian,
@@ -1067,10 +1111,14 @@ class InfoHubFileManager:
                 result_msg += f", {len(delete_errors)} errores al eliminar"
             if protegidos:
                 result_msg += f". Protegidos, sin tocar: {', '.join(protegidos)}"
+            if bloqueados:
+                result_msg += (f". Borrado bloqueado por seguridad en {len(bloqueados)} workspaces: "
+                               + "; ".join(f"{n} ({m})" for n, m in bloqueados.items()))
 
             result = {
-                "status": "success" if not delete_errors else "warning",
+                "status": "success" if not (delete_errors or bloqueados) else "warning",
                 "message": result_msg,
+                "blocked_deletions": bloqueados,
                 "workspaces_processed": workspaces_processed,
                 "uploaded": uploaded,
                 "skipped": skipped,
@@ -1928,7 +1976,14 @@ def _main(page: ft.Page):
                                  ft.Text(encabezado, size=14, weight=ft.FontWeight.BOLD, color=T.TEXT)],
                                 spacing=8,
                             ),
-                            lista("Se borrarían", data.get("huerfanos", []), T.WARN, 20),
+                            *(
+                                [ft.Text(f"⚠ Borrado bloqueado: {data['borrado_bloqueado']}",
+                                         size=13, color=T.DANGER)]
+                                if data.get("borrado_bloqueado")
+                                else []
+                            ),
+                            lista("No se borrarán (bloqueado)" if data.get("borrado_bloqueado")
+                                  else "Se borrarían", data.get("huerfanos", []), T.WARN, 20),
                             lista("Se subirían", data.get("a_subir", []), T.TEAL, 10),
                             *(
                                 [lista("No entran en el cupo", data["sin_cupo"], T.DANGER, 10)]
