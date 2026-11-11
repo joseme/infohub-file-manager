@@ -24,6 +24,19 @@ Panel de control web para sincronizar archivos locales con **AnythingLLM / InfoH
 - **Motor de embeddings:** InfoHub usa el embedder `builtin` (all-MiniLM, 384 dims, sin API externa). La intent previa con `generic-openai` apuntando a commandcode falló porque ese gateway no expone `/embeddings`; y OpenRouter (bge-m3, 1024 dims) quedó sin créditos. Al cambiar de motor se cambia la dimensión del vector: el índice LanceDB del workspace debe borrarse (carpeta `storage/lancedb/<slug>.lance`) y los documentos re-embederse desde el área (re-corrida del sync). El LLM de chat usa commandcode vía `GENERIC_OPEN_AI_*` con la key Anthropic del proveedor.
 - **Simular Limpieza:** el botón muestra, por workspace, qué documentos borraría y qué archivos subiría la carga completa, sin cambiar nada en InfoHub. La lista completa queda en el log. Úsalo antes de cada carga completa contra producción.
 
+## 🌐 Idiomas
+
+La interfaz está en español e inglés, con la misma regla que InfoHub, Infohub Chat y el DMS:
+
+1. la elección del usuario en el selector (barra superior o diálogo de inicio de sesión), guardada en ese navegador o equipo;
+2. si no eligió, el idioma de la instancia de InfoHub (`GET /api/system/instance-language`);
+3. si InfoHub no responde, español.
+
+- **Cambio al instante:** la pantalla se vuelve a armar sin cerrar la sesión ni salir del modo demo. El selector no actúa mientras corre una operación.
+- **Textos:** `i18n.py` (`ES` es la fuente). `tests/i18n_test.py` falla si a `EN` le falta una clave o un campo de formato. El idioma es de cada sesión, porque en la versión web varias comparten el proceso.
+- **Recorrido:** `assets/tour/tour.js` tiene los pasos en los dos idiomas y lee la elección del localStorage de Flutter (`flutter.infohubFm.language`).
+- **Sin traducir:** los mensajes del log (`infohub.log`), `sync_bot.py` y la guía `USER_GUIDE_ES.md`.
+
 ## 🚀 Requisitos
 
 - Python >= 3.10
