@@ -13,7 +13,7 @@ COPY requirements.txt ./
 # Versiones fijas en requirements.txt (Flet 1.x no es compatible con la app)
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY --chown=infohub:infohub app.py config_manager.py ui_theme.py workspace_map.py features.py demo_mode.py ./
+COPY --chown=infohub:infohub app.py config_manager.py ui_theme.py workspace_map.py features.py demo_mode.py sync_guards.py i18n.py ./
 COPY --chown=infohub:infohub assets ./assets
 
 RUN chown -R infohub:infohub /app
