@@ -205,13 +205,13 @@ class TestScanFiles:
         manager.watched_root = ""
         result = manager.scan_files()
         assert result["status"] == "error"
-        assert "not configured" in result["message"]
+        assert "WATCHED_FOLDERS_ROOT" in result["message"]
 
     def test_root_does_not_exist(self, manager, tmp_path):
         manager.watched_root = str(tmp_path / "nonexistent")
         result = manager.scan_files()
         assert result["status"] == "error"
-        assert "does not exist" in result["message"]
+        assert "no existe" in result["message"]
 
     def test_scan_with_files(self, manager, watched_dir):
         manager.watched_root = str(watched_dir)
@@ -1269,7 +1269,7 @@ class TestSortFiles:
         manager.watched_root = ""
         result = manager.sort_files()
         assert result["status"] == "error"
-        assert "not configured" in result["message"]
+        assert "WATCHED_FOLDERS_ROOT" in result["message"]
 
     def test_sort_uploads_and_describes(self, manager, watched_dir):
         """sort_files should upload files and generate image descriptions."""
@@ -1432,7 +1432,7 @@ class TestFullUploadAndClean:
         manager.watched_root = ""
         result = manager.full_upload_and_clean()
         assert result["status"] == "error"
-        assert "not configured" in result["message"]
+        assert "WATCHED_FOLDERS_ROOT" in result["message"]
 
     def test_upload_and_delete_orphans(self, manager, watched_dir):
         """full_upload_and_clean should upload local files and delete orphaned docs."""
@@ -1698,14 +1698,14 @@ class TestCreateImageDescriptions:
         manager.image_description_active = False
         result = manager.create_image_descriptions()
         assert result["status"] == "warning"
-        assert "disabled" in result["message"]
+        assert "desactivadas" in result["message"]
 
     def test_no_root_configured(self, manager):
         manager.image_description_active = True
         manager.watched_root = ""
         result = manager.create_image_descriptions()
         assert result["status"] == "error"
-        assert "not configured" in result["message"]
+        assert "WATCHED_FOLDERS_ROOT" in result["message"]
 
     def test_processes_new_images(self, manager, watched_dir):
         """Should generate descriptions for images without .image_description.txt."""

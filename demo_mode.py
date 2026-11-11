@@ -21,6 +21,8 @@ from pathlib import Path
 
 import requests
 
+from i18n import Translator
+
 logger = logging.getLogger(__name__)
 
 # Una subida no se reintenta: InfoHub sigue procesando tras un corte y
@@ -36,10 +38,8 @@ _IGNORED_NAMES = {"thumbs.db", "desktop.ini"}
 
 # En la versión web (Docker) el panel corre en el servidor: «la carpeta del
 # prospecto» sería una carpeta del servidor. Ahí el modo demo se apaga.
-DEMO_DESKTOP_ONLY = (
-    "Las demos se cargan con el File Manager de escritorio, que trabaja con las "
-    "carpetas de tu equipo. Descargalo desde «Mi demo» en InfoHub Chat."
-)
+# El texto está en i18n.py («demo.desktopOnly»); se conserva el nombre en español.
+DEMO_DESKTOP_ONLY = Translator()("demo.desktopOnly")
 
 
 def demo_mode_enabled() -> bool:
@@ -75,14 +75,12 @@ def days_left(expires_at: str | None) -> int:
     return max(0, int(-(-seconds // 86400)))
 
 
-def format_mb(size: int) -> str:
+def format_mb(size: int, tr: Translator | None = None) -> str:
     """Tamaño legible: en KB por debajo de 1 MB, para que no se lea «0,0 MB»."""
-    if 0 < size < 1024 * 1024:
-        return f"{max(1, round(size / 1024))} KB"
-    return f"{size / (1024 * 1024):.1f} MB".replace(".", ",")
+    return (tr or Translator()).size(size)
 
 
-def choose_folder(initial: str = "") -> str | None:
+def choose_folder(initial: str = "", title: str | None = None) -> str | None:
     """Diálogo nativo para elegir una carpeta: "" si se cancela, None si no hay selector.
 
     El panel corre en el equipo del prospecto (se abre en su navegador), así
@@ -102,7 +100,7 @@ def choose_folder(initial: str = "") -> str | None:
             path = filedialog.askdirectory(
                 parent=root,
                 initialdir=initial or str(Path.home()),
-                title="Elegí la carpeta para tu demo",
+                title=title or Translator()("demo.chooseFolderTitle"),
                 mustexist=True,
             )
         finally:
@@ -121,7 +119,8 @@ class DemoSync:
     documentos de InfoHub (`_remote_base_matches`).
     """
 
-    def __init__(self, base_url: str, token: str, matcher):
+    def __init__(self, base_url: str, token: str, matcher, tr: Translator | None = None):
+        self.tr = tr or Translator()
         self.base_url = (base_url or "").rstrip("/")
         self.token = token
         self.matcher = matcher
@@ -171,17 +170,16 @@ class DemoSync:
                 return True, ""
             return False, self._error(resp)
         except requests.Timeout:
-            return False, "InfoHub tardó demasiado. Volvé a sincronizar en unos minutos para comprobarlo."
+            return False, self.tr("demo.timeout")
         except Exception as e:
             return False, str(e)
 
-    @staticmethod
-    def _error(resp) -> str:
+    def _error(self, resp) -> str:
         try:
             message = (resp.json() or {}).get("error")
         except Exception:
             message = None
-        return message or f"InfoHub respondió {resp.status_code}"
+        return message or self.tr("demo.status", status=resp.status_code)
 
     # --- carpeta local ----------------------------------------------------------
     def ensure_folders(self, base: str, demo: dict) -> list[Path]:
@@ -256,9 +254,9 @@ class DemoSync:
         """Lo que haría Sincronizar, sin cambiar nada (formato de show_simulation)."""
         demo = self.fetch()
         if not demo:
-            return {"status": "error", "message": "No se pudo leer tu demo en InfoHub."}
+            return {"status": "error", "message": self.tr("demo.readFailed")}
         if not base or not Path(base).is_dir():
-            return {"status": "error", "message": "Elegí primero la carpeta de la demo."}
+            return {"status": "error", "message": self.tr("demo.chooseFirst")}
         plan = self.plan(base, demo)
         simulation = {
             name: {
@@ -272,9 +270,9 @@ class DemoSync:
         quitaria = sum(len(d["huerfanos"]) for d in simulation.values())
         subiria = sum(len(d["a_subir"]) for d in simulation.values())
         sin_cupo = sum(len(d["sin_cupo"]) for d in simulation.values())
-        message = f"Simulación, no se cambió nada: se quitarían {quitaria} documentos y se subirían {subiria} archivos."
+        message = self.tr("demo.simulation", deleted=quitaria, uploaded=subiria)
         if sin_cupo:
-            message += f" {sin_cupo} no entran en el cupo de la demo."
+            message += self.tr("demo.simulationNoQuota", count=sin_cupo)
         return {
             "status": "success",
             "message": message,
@@ -287,9 +285,9 @@ class DemoSync:
         """Quita lo que ya no está en la carpeta y después sube lo nuevo."""
         demo = self.fetch()
         if not demo:
-            return {"status": "error", "message": "No se pudo leer tu demo en InfoHub."}
+            return {"status": "error", "message": self.tr("demo.readFailed")}
         if not base or not Path(base).is_dir():
-            return {"status": "error", "message": "Elegí primero la carpeta de la demo."}
+            return {"status": "error", "message": self.tr("demo.chooseFirst")}
         self.ensure_folders(base, demo)
         plan = self.plan(base, demo)
 
@@ -313,11 +311,11 @@ class DemoSync:
                     errors.append(f"{rel}: {error}")
         sin_cupo = [rel for data in plan.values() for rel in data["sin_cupo"]]
 
-        message = f"{uploaded} subidos, {deleted} quitados"
+        message = self.tr("demo.syncResult", uploaded=uploaded, deleted=deleted)
         if sin_cupo:
-            message += f", {len(sin_cupo)} no entran en el cupo ({', '.join(sin_cupo[:5])})"
+            message += self.tr("demo.syncNoQuota", count=len(sin_cupo), names=", ".join(sin_cupo[:5]))
         if errors:
-            message += f", {len(errors)} con error: " + "; ".join(errors[:5])
+            message += self.tr("demo.syncErrors", count=len(errors), errors="; ".join(errors[:5]))
         return {
             "status": "warning" if errors or sin_cupo else "success",
             "message": message,
