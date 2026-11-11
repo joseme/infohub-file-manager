@@ -25,6 +25,8 @@ import sync_guards
 import features
 import demo_mode
 from demo_mode import DemoSync
+import i18n
+from i18n import Translator
 
 # Load environment variables
 # Anclado al dir del ejecutable, no al CWD: si no, doble click no lee el .env
@@ -128,6 +130,9 @@ class InfoHubFileManager:
         self._base_name_cache: dict[str, set[str]] = {}
         self._uploaded_docpaths: set[str] = set()
 
+        # Textos de la sesión (i18n.py); la interfaz lo cambia al elegir idioma.
+        self.tr = Translator()
+
         # None = sin filtro de usuario; tras login: {slug: nombre} habilitados.
         self.session_token: str = ""
         self.allowed_workspaces: dict[str, str] | None = None
@@ -151,18 +156,18 @@ class InfoHubFileManager:
             )
             data = resp.json()
             if resp.status_code != 200 or not data.get("valid"):
-                return False, data.get("message") or "Credenciales invalidas"
+                return False, data.get("message") or self.tr("login.invalid")
 
             self.session_token = data.get("token") or ""
             allowed = self._fetch_allowed_workspaces()
             if allowed is None:
                 self.session_token = ""
-                return False, "No se pudieron obtener los workspaces del usuario"
+                return False, self.tr("result.noWorkspaces")
             self.allowed_workspaces = allowed
             return True, None
         except Exception as e:
             logger.error(f"Login error: {e}")
-            return False, f"Error de conexion con InfoHub: {e}"
+            return False, self.tr("result.connection", error=e)
 
     def login_with_ticket(self, ticket: str) -> tuple[bool, str | None, str | None]:
         """SSO desde el portal de InfoHub: canjea un ticket de un solo uso.
@@ -185,12 +190,12 @@ class InfoHubFileManager:
             allowed = self._fetch_allowed_workspaces()
             if allowed is None:
                 self.session_token = ""
-                return False, "No se pudieron obtener los workspaces del usuario", None
+                return False, self.tr("result.noWorkspaces"), None
             self.allowed_workspaces = allowed
             return True, None, (data.get("user") or {}).get("username")
         except Exception as e:
             logger.error(f"Ticket login error: {e}")
-            return False, f"Error de conexion con InfoHub: {e}", None
+            return False, self.tr("result.connection", error=e), None
 
     def _fetch_allowed_workspaces(self) -> dict[str, str] | None:
         """{slug: nombre} visibles para el usuario logueado (server filtra por membresía)."""
@@ -218,13 +223,13 @@ class InfoHubFileManager:
     def scan_files(self) -> dict:
         """Scan watched folders for files"""
         if not self.watched_root:
-            return {"status": "error", "message": "WATCHED_FOLDERS_ROOT not configured"}
+            return {"status": "error", "message": self.tr("result.rootNotConfigured")}
 
         root_path = Path(self.watched_root)
         if not root_path.exists():
             return {
                 "status": "error",
-                "message": f"Root path does not exist: {self.watched_root}",
+                "message": self.tr("result.rootMissing", path=self.watched_root),
             }
 
         workspaces = {}
@@ -722,7 +727,7 @@ class InfoHubFileManager:
             remaining = self._still_in_documents_area(batch)
             deleted += len(batch) - len(remaining)
             for name in remaining:
-                errors.append(f"No se pudo confirmar el borrado de {name}")
+                errors.append(self.tr("result.deleteUnconfirmed", name=name))
             logger.warning(
                 f"Delete batch timed out: {len(batch) - len(remaining)} borrados, {len(remaining)} pendientes"
             )
@@ -808,14 +813,14 @@ class InfoHubFileManager:
             if not self.watched_root:
                 return {
                     "status": "error",
-                    "message": "WATCHED_FOLDERS_ROOT not configured",
+                    "message": self.tr("result.rootNotConfigured"),
                 }
 
             root_path = Path(self.watched_root)
             if not root_path.exists():
                 return {
                     "status": "error",
-                    "message": f"Root path does not exist: {self.watched_root}",
+                    "message": self.tr("result.rootMissing", path=self.watched_root),
                 }
 
             uploaded = 0
@@ -881,9 +886,10 @@ class InfoHubFileManager:
                 # Update embeddings for this workspace
                 self._update_embeddings(workspace_name)
 
-            message = f"Archivos: {uploaded} subidos, {skipped} omitidos. Imagenes: {images_processed} descritas, {images_skipped} con descripcion existente."
+            message = self.tr("result.sorted", uploaded=uploaded, skipped=skipped,
+                              described=images_processed, existing=images_skipped)
             if protegidos:
-                message += f" Protegidos, sin tocar: {', '.join(protegidos)}."
+                message += self.tr("result.protected", names=", ".join(protegidos))
             return {
                 "status": "success",
                 "message": message,
@@ -899,7 +905,7 @@ class InfoHubFileManager:
 
     def clean_folders(self) -> dict:
         """Clean empty folders in InfoHub"""
-        return {"status": "success", "message": "Empty folders cleaned"}
+        return {"status": "success", "message": self.tr("result.emptyCleaned")}
 
     def simulate_clean(self) -> dict:
         """Simulación de la carga completa: qué se borraría y qué se subiría,
@@ -909,10 +915,11 @@ class InfoHubFileManager:
     def _motivo_bloqueo_borrado(self, carpeta, locales: int, remotos: int, huerfanos: int):
         """Motivo para no borrar los huérfanos de un workspace, o None (ver sync_guards)."""
         if sync_guards.montaje_caido(carpeta, self.montajes_requeridos):
-            return "la carpeta está en montajes_requeridos y no está montada"
+            return self.tr("guard.unmounted")
         return sync_guards.evaluar_borrado(locales, remotos, huerfanos,
                                            umbral_pct=self.umbral_borrado_pct,
-                                           minimo=self.minimo_borrado)
+                                           minimo=self.minimo_borrado,
+                                           tr=self.tr)
 
     def full_upload_and_clean(self, simular: bool = False) -> dict:
         """Full synchronization: upload new/updated files, delete removed ones.
@@ -927,14 +934,14 @@ class InfoHubFileManager:
             if not self.watched_root:
                 return {
                     "status": "error",
-                    "message": "WATCHED_FOLDERS_ROOT not configured",
+                    "message": self.tr("result.rootNotConfigured"),
                 }
 
             root_path = Path(self.watched_root)
             if not root_path.exists():
                 return {
                     "status": "error",
-                    "message": f"Root path does not exist: {self.watched_root}",
+                    "message": self.tr("result.rootMissing", path=self.watched_root),
                 }
 
             uploaded = 0
@@ -943,7 +950,7 @@ class InfoHubFileManager:
             delete_errors = []
             workspaces_processed = 0
             plan = {}
-            problema = sync_guards.raiz_accesible(root_path)
+            problema = sync_guards.raiz_accesible(root_path, tr=self.tr)
             if problema:
                 return {"status": "error", "message": problema}
             estado_fuentes = sync_guards.cargar_estado_fuentes()
@@ -1082,16 +1089,12 @@ class InfoHubFileManager:
                 borrarian = sum(len(p["huerfanos"]) for p in permitidos)
                 subirian = sum(len(p["a_subir"]) for p in plan.values())
                 con_huerfanos = sum(1 for p in permitidos if p["huerfanos"])
-                message = (
-                    f"Simulación, no se cambió nada: se borrarían {borrarian} documentos huérfanos "
-                    f"en {con_huerfanos} workspaces y se subirían {subirian} archivos "
-                    f"({workspaces_processed} workspaces revisados)."
-                )
+                message = self.tr("result.simulation", deleted=borrarian, workspaces=con_huerfanos,
+                                  uploaded=subirian, checked=workspaces_processed)
                 if protegidos:
-                    message += f" Protegidos, sin tocar: {', '.join(protegidos)}."
+                    message += self.tr("result.protected", names=", ".join(protegidos))
                 if bloqueados:
-                    message += (f" Borrado bloqueado por seguridad en {len(bloqueados)} "
-                                f"workspaces: {', '.join(bloqueados)}.")
+                    message += self.tr("result.blocked", count=len(bloqueados), names=", ".join(bloqueados))
                 return {
                     "status": "success",
                     "message": message,
@@ -1103,17 +1106,15 @@ class InfoHubFileManager:
                     "protected": protegidos,
                 }
 
-            result_msg = (
-                f"{workspaces_processed} workspaces procesados, {uploaded} subidos, "
-                f"{skipped} omitidos, {deleted} eliminados"
-            )
+            result_msg = self.tr("result.full", processed=workspaces_processed, uploaded=uploaded,
+                                 skipped=skipped, deleted=deleted)
             if delete_errors:
-                result_msg += f", {len(delete_errors)} errores al eliminar"
+                result_msg += self.tr("result.fullDeleteErrors", count=len(delete_errors))
             if protegidos:
-                result_msg += f". Protegidos, sin tocar: {', '.join(protegidos)}"
+                result_msg += self.tr("result.fullProtected", names=", ".join(protegidos))
             if bloqueados:
-                result_msg += (f". Borrado bloqueado por seguridad en {len(bloqueados)} workspaces: "
-                               + "; ".join(f"{n} ({m})" for n, m in bloqueados.items()))
+                result_msg += self.tr("result.fullBlocked", count=len(bloqueados),
+                                      details="; ".join(f"{n} ({m})" for n, m in bloqueados.items()))
 
             result = {
                 "status": "success" if not (delete_errors or bloqueados) else "warning",
@@ -1179,20 +1180,20 @@ class InfoHubFileManager:
         if not self.image_description_active:
             return {
                 "status": "warning",
-                "message": "Image descriptions are disabled in config",
+                "message": self.tr("result.imagesDisabled"),
             }
 
         if not self.watched_root:
             return {
                 "status": "error",
-                "message": "WATCHED_FOLDERS_ROOT not configured",
+                "message": self.tr("result.rootNotConfigured"),
             }
 
         root_path = Path(self.watched_root)
         if not root_path.exists():
             return {
                 "status": "error",
-                "message": f"Root path does not exist: {self.watched_root}",
+                "message": self.tr("result.rootMissing", path=self.watched_root),
             }
 
         image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
@@ -1228,7 +1229,7 @@ class InfoHubFileManager:
         if not images_to_process:
             return {
                 "status": "success",
-                "message": f"Todas las {skipped} imagenes ya tienen descripciones",
+                "message": self.tr("result.imagesAllDone", count=skipped),
                 "processed": 0,
                 "skipped": skipped,
             }
@@ -1253,7 +1254,7 @@ class InfoHubFileManager:
         if errors:
             return {
                 "status": "warning" if processed > 0 else "error",
-                "message": f"{processed} descripciones creadas, {skipped} omitidas, {len(errors)} errores",
+                "message": self.tr("result.imagesErrors", processed=processed, skipped=skipped, errors=len(errors)),
                 "processed": processed,
                 "skipped": skipped,
                 "errors": errors,
@@ -1261,15 +1262,48 @@ class InfoHubFileManager:
 
         return {
             "status": "success",
-            "message": f"{processed} descripciones creadas, {skipped} omitidas",
+            "message": self.tr("result.imagesDone", processed=processed, skipped=skipped),
             "processed": processed,
             "skipped": skipped,
         }
 
 
-def main(page: ft.Page):
+async def _read_pref(page: ft.Page, key: str):
+    """Preferencia del usuario (localStorage en web, preferencias locales en escritorio)."""
     try:
-        _main(page)
+        return await page.shared_preferences.get(key)
+    except Exception as e:
+        logger.warning(f"No se pudo leer la preferencia {key}: {e}")
+        return None
+
+
+async def _write_pref(page: ft.Page, key: str, value: str):
+    try:
+        await page.shared_preferences.set(key, value)
+    except Exception as e:
+        logger.warning(f"No se pudo guardar la preferencia {key}: {e}")
+
+
+async def main(page: ft.Page):
+    # Lo que sobrevive a un cambio de idioma: la pantalla se vuelve a armar
+    # (_build) con la misma sesión, sin cerrar la sesión de InfoHub.
+    session = {
+        "first": True,
+        "user_lang": i18n.normalize(await _read_pref(page, i18n.PREF_LANGUAGE)),
+        "instance_lang": i18n.normalize(await _read_pref(page, i18n.PREF_INSTANCE_LANGUAGE)),
+        "config": None,
+        "manager": None,
+        "logs": [],
+        "stats": {"workspaces": "0", "files": "0", "uploaded": "0", "pending": "0"},
+        "demo": None,
+        "busy": False,
+    }
+    _build_safely(page, session)
+
+
+def _build_safely(page: ft.Page, session: dict):
+    try:
+        _build(page, session)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1279,9 +1313,26 @@ def main(page: ft.Page):
         page.update()
 
 
-def _main(page: ft.Page):
+def _rebuild(page: ft.Page, session: dict):
+    """Vuelve a armar la pantalla (cambio de idioma) conservando la sesión."""
+    while page.pop_dialog():
+        pass
+    page.overlay.clear()
+    page.controls.clear()
+    page.appbar = None
+    _build_safely(page, session)
+    page.update()
+
+
+def _build(page: ft.Page, session: dict):
+    first_build = session["first"]
+    session["first"] = False
+    tr = Translator(i18n.resolve(session["user_lang"], session["instance_lang"]))
+
     # ========== PAGE CONFIGURATION ==========
-    config = ConfigManager()
+    if session["config"] is None:
+        session["config"] = ConfigManager()
+    config = session["config"]
     page.title = config.get("app_title", "InfoHub File Manager")
     page.theme_mode = ft.ThemeMode.LIGHT
     page.fonts = T.FONTS
@@ -1292,11 +1343,54 @@ def _main(page: ft.Page):
     # Marca InfoHub (manual KnowHub v1.0): tokens en ui_theme.py
     page.theme = T.page_theme()
 
-    manager = InfoHubFileManager(config)
+    if session["manager"] is None:
+        session["manager"] = InfoHubFileManager(config)
+    manager = session["manager"]
+    manager.tr = tr
+
+    # ========== IDIOMA ==========
+    def change_language(lang):
+        lang = i18n.normalize(lang)
+        if not lang or lang == tr.lang:
+            return
+        if session["busy"]:
+            show_snackbar(tr("ops.busy"), T.WARN_DEEP)
+            return
+        session["user_lang"] = lang
+        page.run_task(_write_pref, page, i18n.PREF_LANGUAGE, lang)
+        _rebuild(page, session)
+
+    def language_dropdown():
+        return T.dropdown(
+            value=tr.lang,
+            options=[ft.dropdown.Option(key=lang, text=i18n.ENDONYMS[lang]) for lang in i18n.SUPPORTED],
+            dense=True,
+            text_size=13,
+            width=130,
+            content_padding=ft.padding.Padding.symmetric(horizontal=10, vertical=6),
+            tooltip=tr("common.language"),
+            on_select=lambda e: change_language(e.control.value),
+        )
+
+    def apply_instance_language(lang, rebuild=True):
+        """Corre en un hilo. Guarda el idioma de la instancia; si cambia el de la
+        pantalla (el usuario no eligió uno), la vuelve a armar."""
+        lang = i18n.normalize(lang)
+        if not lang or lang == session["instance_lang"]:
+            return False
+        session["instance_lang"] = lang
+        page.run_task(_write_pref, page, i18n.PREF_INSTANCE_LANGUAGE, lang)
+        changed = i18n.resolve(session["user_lang"], lang) != tr.lang
+        if changed and rebuild:
+            async def _do():
+                if not session["busy"]:
+                    _rebuild(page, session)
+            page.run_task(_do)
+        return changed
 
     # ========== LOGIN DIALOG ==========
     login_base_url = T.textfield(
-        label="URL InfoHub",
+        label=tr("login.url"),
         value=manager.base_url or "http://localhost:3001",
         dense=True,
         content_padding=ft.padding.Padding.symmetric(horizontal=10, vertical=8),
@@ -1304,14 +1398,14 @@ def _main(page: ft.Page):
         width=360,
     )
     login_username = T.textfield(
-        label="Usuario",
+        label=tr("login.username"),
         dense=True,
         content_padding=ft.padding.Padding.symmetric(horizontal=10, vertical=8),
         text_size=13,
         width=360,
     )
     login_password = T.textfield(
-        label="Contraseña",
+        label=tr("login.password"),
         password=True,
         can_reveal_password=True,
         dense=True,
@@ -1322,7 +1416,7 @@ def _main(page: ft.Page):
     )
     login_error = ft.Text("", color=T.DANGER, size=13)
     if config.last_error:
-        login_error.value = f"config.json invalido: {config.last_error}. Se estan usando valores por defecto."
+        login_error.value = tr("login.badConfig", error=config.last_error)
         login_error.color = T.WARN
     login_progress = ft.ProgressRing(width=18, height=18, stroke_width=2, visible=False)
     login_dialog = ft.AlertDialog(
@@ -1331,13 +1425,14 @@ def _main(page: ft.Page):
         title=ft.Row(
             [
                 ft.Icon(Icons.LOCK_OUTLINED, color=T.ACCENT_HOVER),
-                ft.Text("Iniciar sesión en InfoHub", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
+                ft.Text(tr("login.title"), size=18, weight=ft.FontWeight.BOLD, color=T.TEXT, expand=True),
+                language_dropdown(),
             ],
             spacing=8,
         ),
         content=ft.Column(
             [
-                ft.Text("Accedé con tu usuario y contraseña de InfoHub. Solo verás los workspaces que tenés habilitados.", size=13, color=T.TEXT_2),
+                ft.Text(tr("login.intro"), size=13, color=T.TEXT_2),
                 ft.Container(height=8),
                 login_base_url,
                 login_username,
@@ -1349,12 +1444,12 @@ def _main(page: ft.Page):
         ),
         actions=[
             ft.TextButton(
-                "Volver al inicio" if PORTAL_URL else "Salir",
+                tr("login.backHome") if PORTAL_URL else tr("login.exit"),
                 icon=Icons.HOME_OUTLINED if PORTAL_URL else Icons.CLOSE_OUTLINED,
                 on_click=lambda e: go_to_portal() if PORTAL_URL else page.window.close(),
             ),
             ft.FilledButton(
-                "Ingresar",
+                tr("login.submit"),
                 icon=Icons.LOGIN_OUTLINED,
                 on_click=lambda e: _handle_login(),
                 style=ft.ButtonStyle(
@@ -1374,14 +1469,14 @@ def _main(page: ft.Page):
         title=ft.Row(
             [
                 ft.Icon(Icons.FOLDER_SPECIAL_OUTLINED, color=T.ACCENT_HOVER),
-                ft.Text("Tus workspaces habilitados", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
+                ft.Text(tr("workspaces.title"), size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
             ],
             spacing=8,
         ),
         content=ft.Container(content=user_ws_list, width=380, height=300),
         actions=[
             ft.FilledButton(
-                "Aceptar",
+                tr("common.accept"),
                 icon=Icons.CHECK_OUTLINED,
                 on_click=lambda e: page.pop_dialog(),
                 style=ft.ButtonStyle(
@@ -1410,7 +1505,7 @@ def _main(page: ft.Page):
         else:
             user_ws_list.controls = [
                 ft.Text(
-                    "No tenés workspaces habilitados.",
+                    tr("workspaces.none"),
                     size=14,
                     color=T.TEXT_2,
                     italic=True,
@@ -1448,25 +1543,31 @@ def _main(page: ft.Page):
         Un usuario de demo de InfoHub entra en modo demo: trabaja solo con su
         sesión y no necesita la API key.
         """
-        demo = DemoSync(base_url, manager.session_token, manager).fetch() if manager.session_token else None
+        # Otra URL puede ser otra instancia, con otro idioma.
+        relang = apply_instance_language(i18n.fetch_instance_language(base_url), rebuild=False)
+        demo = DemoSync(base_url, manager.session_token, manager, tr).fetch() if manager.session_token else None
         if demo and not demo_mode.demo_mode_enabled():
             # Versión web: un prospecto no opera sobre carpetas del servidor.
             manager.session_token = ""
             manager.allowed_workspaces = None
             logger.warning(f"Usuario de demo rechazado en la versión web: {username}")
-            page.run_task(_show_login_error, demo_mode.DEMO_DESKTOP_ONLY, not close_login)
+            page.run_task(_show_login_error, tr("demo.desktopOnly"), not close_login)
             return
         api_ok = demo is not None or (bool(manager.api_key) and _validate_credentials(base_url, manager.api_key))
-        page.run_task(_finish_login, username, api_ok, close_login, demo)
+        page.run_task(_finish_login, username, api_ok, close_login, demo, relang)
 
-    async def _finish_login(username: str, api_ok: bool, close_login: bool, demo: dict | None = None):
+    async def _finish_login(username: str, api_ok: bool, close_login: bool, demo: dict | None = None,
+                            relang: bool = False):
         # Los diálogos se tocan solo desde el bucle de la sesión: desde un hilo
         # el parche open=False del login puede perderse y el modal no se cierra.
-        show_snackbar(f"Sesión iniciada como {username}", T.OK_DEEP)
-        add_log(
-            f"Login exitoso (usuario: {username}) - Workspaces habilitados: {len(manager.allowed_workspaces or {})}",
-            "success",
-        )
+        show_snackbar(tr("login.signedIn", user=username), T.OK_DEEP)
+        add_log(tr("login.signedInLog", user=username, count=len(manager.allowed_workspaces or {})), "success")
+        if relang:
+            # La instancia está en otro idioma: se rearma la pantalla ya con la
+            # sesión iniciada (repone el modo demo si corresponde).
+            session["demo"] = demo
+            _rebuild(page, session)
+            return
         if demo:
             enter_demo_mode(demo)
             if close_login:
@@ -1475,8 +1576,8 @@ def _main(page: ft.Page):
                 page.pop_dialog()
             return
         if not api_ok:
-            show_snackbar("API Key InfoHub ausente o inválida en config.json: la sincronización fallará hasta configurarla", T.DANGER)
-            add_log("Advertencia: API Key InfoHub ausente o inválida. Configúrala en Ajustes para poder sincronizar.", "warning")
+            show_snackbar(tr("login.noApiKey"), T.DANGER)
+            add_log(tr("login.noApiKeyLog"), "warning")
         if not close_login:
             _show_user_workspaces()
             return
@@ -1501,14 +1602,10 @@ def _main(page: ft.Page):
             ok, msg, username = manager.login_with_ticket(ticket)
             page.run_task(page.push_route, "/")  # quita el ticket de la URL (seguro desde un hilo)
             if ok:
-                _after_login(username or "usuario", manager.base_url)
+                _after_login(username or tr("common.user"), manager.base_url)
             else:
-                add_log(f"Inicio de sesión desde el portal falló: {msg}", "warning")
-                page.run_task(
-                    _show_login_error,
-                    "No se pudo iniciar sesión desde el portal (enlace vencido o usado). Ingresá tus credenciales.",
-                    True,
-                )
+                add_log(tr("login.ssoFailedLog", error=msg), "warning")
+                page.run_task(_show_login_error, tr("login.ssoFailed"), True)
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -1522,7 +1619,7 @@ def _main(page: ft.Page):
         username = login_username.value.strip()
         password = login_password.value or ""
         if not base_url or not username or not password:
-            login_error.value = "URL, usuario y contraseña son obligatorios"
+            login_error.value = tr("login.required")
             page.update()
             return
 
@@ -1537,7 +1634,7 @@ def _main(page: ft.Page):
                 ok, msg = manager.login(username, password)
                 logger.info(f"Resultado de login en {base_url}: ok={ok} mensaje={msg}")
                 if not ok:
-                    page.run_task(_show_login_error, msg or "Credenciales inválidas")
+                    page.run_task(_show_login_error, msg or tr("login.invalid"))
                     return
 
                 config.set("anythingllm_base_url", base_url)
@@ -1545,12 +1642,14 @@ def _main(page: ft.Page):
                 _after_login(username, base_url, close_login=True)
             except Exception as ex:
                 logger.exception(f"Error inesperado en login: {ex}")
-                page.run_task(_show_login_error, f"Error: {ex}")
+                page.run_task(_show_login_error, tr("common.error", error=ex))
 
         threading.Thread(target=_do_login, daemon=True).start()
 
-    sso_ticket = _query_param(page, "ticket")
-    if not sso_ticket:
+    # Al rearmar la pantalla con la sesión iniciada, no se vuelve a pedir el login.
+    signed_in = bool(manager.session_token)
+    sso_ticket = _query_param(page, "ticket") if first_build else ""
+    if not sso_ticket and not signed_in:
         page.show_dialog(login_dialog)
 
     # ========== STATE ==========
@@ -1559,15 +1658,20 @@ def _main(page: ft.Page):
     # ========== UI COMPONENTS ==========
 
     # --- SnackBar for notifications ---
-    snackbar = ft.SnackBar(
-        content=ft.Text("", color=T.ON_POPUP),
-        action=ft.SnackBarAction(
-            label="Cerrar",
-            on_click=lambda e: setattr(snackbar, "open", False),
-        ),
-        bgcolor=T.BG_POPUP,
-        duration=4000,
-    )
+    # El mismo aviso sirve a todas las versiones de la pantalla: al cambiar de
+    # idioma se cierra el abierto en lugar de dejar uno huérfano en el otro idioma.
+    snackbar = session.get("snackbar")
+    if snackbar is None:
+        snackbar = ft.SnackBar(
+            content=ft.Text("", color=T.ON_POPUP),
+            action=ft.SnackBarAction(label=""),
+            bgcolor=T.BG_POPUP,
+            duration=4000,
+        )
+        snackbar.action.on_click = lambda e: setattr(snackbar, "open", False)
+        session["snackbar"] = snackbar
+    snackbar.action.label = tr("common.close")
+    snackbar.open = False
     page.overlay.append(snackbar)
 
     def show_snackbar(message, color=T.BG_POPUP):
@@ -1615,10 +1719,17 @@ def _main(page: ft.Page):
             col={"xs": 6, "sm": 6, "md": 3, "lg": 3, "xl": 3},
         )
 
-    workspaces_stat = create_stat_card("0", "Workspaces", Icons.FOLDER_COPY_OUTLINED, T.ACCENT)
-    files_stat = create_stat_card("0", "Archivos", Icons.DESCRIPTION_OUTLINED, T.TEAL)
-    uploaded_stat = create_stat_card("0", "Subidos", Icons.CLOUD_UPLOAD_OUTLINED, T.OK_DEEP)
-    pending_stat = create_stat_card("0", "Pendientes", Icons.SCHEDULE_OUTLINED, T.WARN_DEEP)
+    stats = session["stats"]
+    workspaces_stat = create_stat_card(stats["workspaces"], tr("stats.workspaces"), Icons.FOLDER_COPY_OUTLINED, T.ACCENT)
+    files_stat = create_stat_card(stats["files"], tr("stats.files"), Icons.DESCRIPTION_OUTLINED, T.TEAL)
+    uploaded_stat = create_stat_card(stats["uploaded"], tr("stats.uploaded"), Icons.CLOUD_UPLOAD_OUTLINED, T.OK_DEEP)
+    pending_stat = create_stat_card(stats["pending"], tr("stats.pending"), Icons.SCHEDULE_OUTLINED, T.WARN_DEEP)
+    stat_cards = {"workspaces": workspaces_stat, "files": files_stat, "uploaded": uploaded_stat, "pending": pending_stat}
+
+    def set_stat(name, value):
+        """Actualiza un total y lo recuerda en la sesión (sobrevive al cambio de idioma)."""
+        stats[name] = str(value)
+        stat_cards[name].content.content.controls[1].controls[0].value = stats[name]
 
     def update_stats(result=None):
         if not result or result.get("status") not in ("success", "warning"):
@@ -1626,30 +1737,23 @@ def _main(page: ft.Page):
 
         # Scan results: workspaces & file counts
         if "total_workspaces" in result:
-            workspaces_stat.content.content.controls[1].controls[0].value = str(
-                result.get("total_workspaces", 0)
-            )
+            set_stat("workspaces", result.get("total_workspaces", 0))
         if "total_files" in result:
-            files_stat.content.content.controls[1].controls[0].value = str(
-                result.get("total_files", 0)
-            )
+            set_stat("files", result.get("total_files", 0))
 
         # Upload results: uploaded file count
         if "uploaded" in result:
-            val = result.get("uploaded", 0)
-            uploaded_stat.content.content.controls[1].controls[0].value = str(val)
+            set_stat("uploaded", result.get("uploaded", 0))
 
         # Image description results: processed count
         if "processed" in result:
-            val = result.get("processed", 0)
-            uploaded_stat.content.content.controls[1].controls[0].value = str(val)
+            set_stat("uploaded", result.get("processed", 0))
 
         # Pending: skipped uploads or images still needing descriptions
         skipped_uploads = result.get("skipped", None)
         images_skipped = result.get("images_skipped", None)
         if skipped_uploads is not None or images_skipped is not None:
-            total_skipped = (skipped_uploads or 0) + (images_skipped or 0)
-            pending_stat.content.content.controls[1].controls[0].value = str(total_skipped)
+            set_stat("pending", (skipped_uploads or 0) + (images_skipped or 0))
 
         page.update()
 
@@ -1662,7 +1766,7 @@ def _main(page: ft.Page):
     )
 
     status_text = ft.Text(
-        "Sistema listo",
+        tr("status.ready"),
         size=14,
         weight=ft.FontWeight.W_500,
         color=T.TEXT,
@@ -1740,7 +1844,7 @@ def _main(page: ft.Page):
                         max_lines=2,
                         overflow=ft.TextOverflow.ELLIPSIS,
                     ),
-                    T.primary_button("Ejecutar", Icons.PLAY_ARROW_ROUNDED, on_click),
+                    T.primary_button(tr("common.run"), Icons.PLAY_ARROW_ROUNDED, on_click),
                 ],
                 spacing=10,
                 alignment=ft.MainAxisAlignment.START,
@@ -1760,8 +1864,13 @@ def _main(page: ft.Page):
         height=250,
     )
 
-    def add_log(message, level="info"):
-        timestamp = datetime.now().strftime("%H:%M:%S")
+    def add_log(message, level="info", timestamp=None, remember=True):
+        timestamp = timestamp or datetime.now().strftime("%H:%M:%S")
+        if remember:
+            # El registro sobrevive al cambio de idioma (cada línea queda en el
+            # idioma en que se escribió).
+            session["logs"].append((timestamp, message, level))
+            del session["logs"][:-100]
         color = {
             "info": T.ACCENT_HOVER,
             "success": T.OK,
@@ -1812,17 +1921,18 @@ def _main(page: ft.Page):
 
     def clear_logs(e=None):
         logs_list.controls.clear()
+        session["logs"].clear()
         page.update()
 
     # --- Confirmation Dialog ---
     confirm_dialog = ft.AlertDialog(
         modal=True,
         bgcolor=T.BG_SECONDARY,
-        title=ft.Text("Confirmar Operacion", color=T.TEXT),
-        content=ft.Text("Estas seguro de que deseas ejecutar esta operacion?", color=T.TEXT_2),
+        title=ft.Text(tr("confirm.title"), color=T.TEXT),
+        content=ft.Text(tr("confirm.body"), color=T.TEXT_2),
         actions=[
-            ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
-            ft.FilledButton("Confirmar", on_click=lambda e: None),
+            ft.TextButton(tr("common.cancel"), on_click=lambda e: page.pop_dialog()),
+            ft.FilledButton(tr("common.confirm"), on_click=lambda e: None),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -1831,11 +1941,11 @@ def _main(page: ft.Page):
     progress_dialog = ft.AlertDialog(
         modal=True,
         bgcolor=T.BG_SECONDARY,
-        title=ft.Text("Procesando...", color=T.TEXT),
+        title=ft.Text(tr("progress.title"), color=T.TEXT),
         content=ft.Column(
             [
                 ft.ProgressRing(width=40, height=40),
-                ft.Text("Ejecutando operacion, por favor espere...", color=T.TEXT_2),
+                ft.Text(tr("progress.body"), color=T.TEXT_2),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=20,
@@ -1860,16 +1970,16 @@ def _main(page: ft.Page):
     explorer_dialog = ft.AlertDialog(
         modal=True,
         bgcolor=T.BG_SECONDARY,
-        title=ft.Text("Workspaces Encontrados", color=T.TEXT),
+        title=ft.Text(tr("scan.title"), color=T.TEXT),
         content=ft.Container(width=500, height=400),
         actions=[
-            ft.TextButton("Cerrar", on_click=lambda e: page.pop_dialog()),
+            ft.TextButton(tr("common.close"), on_click=lambda e: page.pop_dialog()),
         ],
     )
     def show_workspaces(result):
         if result.get("status") != "success":
             return
-        explorer_dialog.title = ft.Text("Workspaces Encontrados", color=T.TEXT)
+        explorer_dialog.title = ft.Text(tr("scan.title"), color=T.TEXT)
 
         workspaces = result.get("workspaces", {})
         if not workspaces:
@@ -1877,7 +1987,7 @@ def _main(page: ft.Page):
                 content=ft.Column(
                     [
                         ft.Icon(Icons.FOLDER_OFF_OUTLINED, size=48, color=T.BORDER_STRONG),
-                        ft.Text("No se encontraron workspaces", color=T.TEXT_2),
+                        ft.Text(tr("scan.none"), color=T.TEXT_2),
                     ],
                     alignment=ft.MainAxisAlignment.CENTER,
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1900,7 +2010,7 @@ def _main(page: ft.Page):
                     )
                 if len(data["files"]) > 5:
                     files_chips.append(
-                        ft.Text(f"+{len(data['files']) - 5} mas", size=12, color=T.TEXT_2)
+                        ft.Text(tr("scan.more", count=len(data['files']) - 5), size=12, color=T.TEXT_2)
                     )
 
                 workspace_items.append(
@@ -1927,7 +2037,7 @@ def _main(page: ft.Page):
                                     spacing=4,
                                     run_spacing=4,
                                     wrap=True,
-                                ) if files_chips else ft.Text("Sin archivos", size=12, color=T.TEXT_3, italic=True),
+                                ) if files_chips else ft.Text(tr("scan.noFiles"), size=12, color=T.TEXT_3, italic=True),
                             ],
                             spacing=6,
                         ),
@@ -1952,21 +2062,21 @@ def _main(page: ft.Page):
         """Qué haría la carga completa: huérfanos que se borrarían y archivos que se subirían."""
         if result.get("status") != "success":
             return
-        titulo = "Simulación de la sincronización" if demo_state["demo"] else "Simulación de limpieza"
+        titulo = tr("simulation.titleSync") if demo_state["demo"] else tr("simulation.titleClean")
         explorer_dialog.title = ft.Text(titulo, color=T.TEXT)
 
         def lista(titulo, nombres, color, limite):
             if not nombres:
-                return ft.Text(f"{titulo}: ninguno", size=12, color=T.TEXT_3, italic=True)
-            filas = [ft.Text(f"{titulo} ({len(nombres)})", size=12, weight=ft.FontWeight.BOLD, color=color)]
+                return ft.Text(tr("simulation.none", title=titulo), size=12, color=T.TEXT_3, italic=True)
+            filas = [ft.Text(tr("simulation.count", title=titulo, count=len(nombres)), size=12, weight=ft.FontWeight.BOLD, color=color)]
             filas += [ft.Text(n, size=11, color=T.TEXT_2, selectable=True) for n in nombres[:limite]]
             if len(nombres) > limite:
-                filas.append(ft.Text(f"+{len(nombres) - limite} más (lista completa en el log)", size=11, color=T.TEXT_3))
+                filas.append(ft.Text(tr("simulation.more", count=len(nombres) - limite), size=11, color=T.TEXT_3))
             return ft.Column(filas, spacing=2)
 
         items = [ft.Text(result.get("message", ""), size=13, color=T.TEXT)]
         for name, data in result.get("simulation", {}).items():
-            encabezado = name + (" · se crearía" if data.get("nuevo") else "")
+            encabezado = name + (tr("simulation.wouldCreate") if data.get("nuevo") else "")
             items.append(
                 ft.Container(
                     content=ft.Column(
@@ -1977,16 +2087,16 @@ def _main(page: ft.Page):
                                 spacing=8,
                             ),
                             *(
-                                [ft.Text(f"⚠ Borrado bloqueado: {data['borrado_bloqueado']}",
+                                [ft.Text(tr("simulation.blocked", reason=data['borrado_bloqueado']),
                                          size=13, color=T.DANGER)]
                                 if data.get("borrado_bloqueado")
                                 else []
                             ),
-                            lista("No se borrarán (bloqueado)" if data.get("borrado_bloqueado")
-                                  else "Se borrarían", data.get("huerfanos", []), T.WARN, 20),
-                            lista("Se subirían", data.get("a_subir", []), T.TEAL, 10),
+                            lista(tr("simulation.notDeleted") if data.get("borrado_bloqueado")
+                                  else tr("simulation.wouldDelete"), data.get("huerfanos", []), T.WARN, 20),
+                            lista(tr("simulation.wouldUpload"), data.get("a_subir", []), T.TEAL, 10),
                             *(
-                                [lista("No entran en el cupo", data["sin_cupo"], T.DANGER, 10)]
+                                [lista(tr("simulation.noQuota"), data["sin_cupo"], T.DANGER, 10)]
                                 if data.get("sin_cupo")
                                 else []
                             ),
@@ -2013,7 +2123,7 @@ def _main(page: ft.Page):
 
         for field in config_schema:
             key = field["key"]
-            label = field["label"]
+            label = tr(f"config.field.{key}") if f"config.field.{key}" in i18n.ES else field["label"]
             current_val = config.get(key, "")
 
             if field["type"] == "bool":
@@ -2080,7 +2190,7 @@ def _main(page: ft.Page):
         title=ft.Row(
             [
                 ft.Icon(Icons.TUNE_OUTLINED, color=T.ACCENT_HOVER),
-                ft.Text("Configuración", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
+                ft.Text(tr("config.title"), size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
             ],
             spacing=8,
         ),
@@ -2090,12 +2200,12 @@ def _main(page: ft.Page):
         ),
         actions=[
             ft.TextButton(
-                "Cancelar",
+                tr("common.cancel"),
                 icon=Icons.CLOSE_OUTLINED,
                 on_click=lambda e: page.pop_dialog(),
             ),
             ft.FilledButton(
-                "Guardar",
+                tr("common.save"),
                 icon=Icons.SAVE_OUTLINED,
                 on_click=lambda e: save_config(),
                 style=ft.ButtonStyle(
@@ -2132,10 +2242,10 @@ def _main(page: ft.Page):
             page.update()
 
             page.pop_dialog()
-            show_snackbar("Configuración guardada correctamente", T.OK_DEEP)
-            add_log("Configuración actualizada y guardada", "success")
+            show_snackbar(tr("config.saved"), T.OK_DEEP)
+            add_log(tr("config.savedLog"), "success")
         else:
-            show_snackbar("Error al guardar configuracion", T.DANGER_DEEP)
+            show_snackbar(tr("config.saveFailed"), T.DANGER_DEEP)
 
     def open_config_editor(e=None):
         for field in config_schema:
@@ -2158,41 +2268,49 @@ def _main(page: ft.Page):
         level = result.get("status", "info")
 
         if level == "success":
-            set_status(f"✓ {operation_name} completado", T.OK)
+            set_status(tr("status.done", name=operation_name), T.OK)
             add_log(f"{operation_name}: {result.get('message', 'OK')}", "success")
-            show_snackbar(f"{operation_name} completado exitosamente", T.OK_DEEP)
+            show_snackbar(tr("ops.doneSnack", name=operation_name), T.OK_DEEP)
         elif level == "warning":
-            set_status(f"⚠ {operation_name} - advertencia", T.WARN)
-            add_log(f"{operation_name}: {result.get('message', 'Warning')}", "warning")
-            show_snackbar(result.get("message", "Advertencia"), T.WARN_DEEP)
+            set_status(tr("status.warning", name=operation_name), T.WARN)
+            add_log(f"{operation_name}: {result.get('message', tr('ops.warning'))}", "warning")
+            show_snackbar(result.get("message", tr("ops.warning")), T.WARN_DEEP)
         else:
-            set_status(f"✗ {operation_name} fallo", T.DANGER)
+            set_status(tr("status.failed", name=operation_name), T.DANGER)
             add_log(f"{operation_name}: {result.get('message', str(result))}", "error")
-            show_snackbar(f"Error en {operation_name}: {result.get('message', '')}", T.DANGER_DEEP)
+            show_snackbar(tr("ops.errorSnack", name=operation_name, message=result.get("message", "")), T.DANGER_DEEP)
 
         logger.info(f"{operation_name}: {result}")
         nonlocal is_processing
         is_processing = False
+        session["busy"] = False
         progress_ring.visible = False
         page.update()
 
-    def wrap_operation(name, fn, confirm=False, dialog_title="", dialog_msg="", show_progress=False):
+    # Las operaciones se identifican por clave (scan, simulate…); el nombre
+    # visible sale del diccionario («ops.<clave>.title»).
+    def wrap_operation(op, fn, confirm=False, show_progress=False):
+        name = tr(f"ops.{op}.title")
+        dialog_title = name
+        dialog_msg = tr(f"ops.{op}.confirm") if confirm else ""
+
         def handler(e):
             nonlocal is_processing
             if is_processing:
-                show_snackbar("Ya hay una operacion en curso", T.WARN_DEEP)
+                show_snackbar(tr("ops.busy"), T.WARN_DEEP)
                 return
 
             def execute():
                 nonlocal is_processing
                 is_processing = True
+                session["busy"] = True
 
                 if show_progress:
-                    progress_dialog.title.value = f"{name} - En progreso"
+                    progress_dialog.title.value = tr("ops.inProgress", name=name)
                     progress_dialog.content.value = ft.Column(
                         [
                             ft.ProgressRing(width=40, height=40),
-                            ft.Text("Procesando archivos y generando descripciones...", color=T.TEXT_2),
+                            ft.Text(tr("ops.processingFiles"), color=T.TEXT_2),
                         ],
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=20,
@@ -2200,8 +2318,8 @@ def _main(page: ft.Page):
                     page.show_dialog(progress_dialog)
                 page.update()
 
-                set_status(f"Ejecutando: {name}...", T.ACCENT_HOVER, loading=True)
-                add_log(f"Iniciando: {name}...", "info")
+                set_status(tr("status.running", name=name), T.ACCENT_HOVER, loading=True)
+                add_log(tr("ops.starting", name=name), "info")
 
                 def run_in_thread():
                     try:
@@ -2209,11 +2327,11 @@ def _main(page: ft.Page):
                         log_operation(name, result, show_progress)
                         if result.get("status") in ("success", "warning"):
                             update_stats(result)
-                            if name == "Escanear Archivos":
+                            if op == "scan":
                                 show_workspaces(result)
-                            elif name in ("Simular Limpieza", "Simular sincronización"):
+                            elif op in ("simulate", "demoSimulate"):
                                 show_simulation(result)
-                            if name in DEMO_OPERATIONS:
+                            if op in DEMO_OPERATIONS:
                                 refresh_demo()
                     except Exception as ex:
                         log_operation(name, {"status": "error", "message": str(ex)}, show_progress)
@@ -2227,60 +2345,30 @@ def _main(page: ft.Page):
 
         return handler
 
-    on_sort_files = wrap_operation(
-        "Actualizar Espacios de Trabajo",
-        manager.sort_files,
-        confirm=True,
-        dialog_title="Actualizar Espacios de Trabajo",
-        dialog_msg="Se subiran archivos a los workspaces y se generaran descripciones de imagenes con IA. ¿Continuar?",
-        show_progress=True,
-    )
-
-    on_clean_folders = wrap_operation(
-        "Limpiar Carpetas",
-        manager.clean_folders,
-        confirm=True,
-        dialog_title="Limpiar Carpetas",
-        dialog_msg="Se eliminaran los workspaces vacios. ¿Continuar?",
-    )
-
-    on_scan_files = wrap_operation("Escanear Archivos", manager.scan_files)
-
-    on_simulate_clean = wrap_operation("Simular Limpieza", manager.simulate_clean)
-
-    on_full_upload = wrap_operation(
-        "Carga Completa y Limpieza",
-        manager.full_upload_and_clean,
-        confirm=True,
-        dialog_title="Carga Completa y Limpieza",
-        dialog_msg="Se subiran archivos nuevos, se actualizaran los existentes y se eliminaran documentos huerfanos de workspaces. ¿Continuar?",
-        show_progress=True,
-    )
-
+    on_sort_files = wrap_operation("sort", manager.sort_files, confirm=True, show_progress=True)
+    on_clean_folders = wrap_operation("clean", manager.clean_folders, confirm=True)
+    on_scan_files = wrap_operation("scan", manager.scan_files)
+    on_simulate_clean = wrap_operation("simulate", manager.simulate_clean)
+    on_full_upload = wrap_operation("full", manager.full_upload_and_clean, confirm=True, show_progress=True)
     on_create_image_descriptions = wrap_operation(
-        "Descripciones de Imagenes",
-        manager.create_image_descriptions,
-        confirm=True,
-        dialog_title="Descripciones de Imagenes",
-        dialog_msg="Se generaran descripciones con IA para todas las imagenes sin descripcion. ¿Continuar?",
-        show_progress=True,
+        "images", manager.create_image_descriptions, confirm=True, show_progress=True
     )
 
     # ========== MODO DEMO ==========
     # Un prospecto de una demo de InfoHub (demo_mode.py): elige una carpeta,
     # el panel crea una subcarpeta por workspace y «Sincronizar» sube y quita.
     demo_state = {"demo": None, "sync": None}
-    DEMO_OPERATIONS = ("Sincronizar", "Simular sincronización")
+    DEMO_OPERATIONS = ("demoSync", "demoSimulate")
 
     demo_title = ft.Text("", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT)
     demo_quota = ft.Text("", size=13, color=T.TEXT_2)
     demo_folder = T.textfield(
-        label="Carpeta de la demo",
+        label=tr("demo.folder"),
         value=config.get("demo_folder", ""),
         dense=True,
         expand=True,
         text_size=13,
-        hint_text="Elegí una carpeta o escribí su ruta",
+        hint_text=tr("demo.folderHint"),
         on_submit=lambda e: use_demo_folder(demo_folder.value),
     )
     demo_workspaces = ft.Column(spacing=6)
@@ -2291,20 +2379,22 @@ def _main(page: ft.Page):
     def render_demo(demo: dict):
         demo_state["demo"] = demo
         days = demo_mode.days_left(demo.get("expiresAt"))
-        demo_title.value = f"Tu demo de {demo.get('company', '')}"
-        demo_quota.value = (
-            f"{'Vence hoy' if days == 0 else 'Queda 1 día' if days == 1 else f'Quedan {days} días'} · "
-            f"Documentos: {demo['usedDocs']} de {demo['maxDocs']} · "
-            f"Espacio: {demo_mode.format_mb(demo['usedBytes'])} de {demo_mode.format_mb(demo['maxBytes'])}"
+        session["demo"] = demo
+        demo_title.value = tr("demo.title", company=demo.get("company", ""))
+        remaining = (tr("demo.expiresToday") if days == 0 else tr("demo.oneDayLeft") if days == 1
+                     else tr("demo.daysLeft", days=days))
+        demo_quota.value = tr(
+            "demo.quota", days=remaining, used=demo["usedDocs"], max=demo["maxDocs"],
+            usedSpace=tr.size(demo["usedBytes"]), maxSpace=tr.size(demo["maxBytes"]),
         )
-        workspaces_stat.content.content.controls[1].controls[0].value = str(len(demo.get("workspaces", [])))
+        set_stat("workspaces", len(demo.get("workspaces", [])))
         demo_workspaces.controls = [
             ft.Row(
                 [
                     ft.Icon(Icons.FOLDER_OUTLINED, color=T.ACCENT_HOVER, size=18),
                     ft.Text(w["name"], size=14, weight=ft.FontWeight.W_500, color=T.TEXT, expand=True),
                     ft.Text(
-                        f"{len(w['documents'])} {'documento' if len(w['documents']) == 1 else 'documentos'} en InfoHub",
+                        tr.plural("demo.docsInInfohub", len(w["documents"])),
                         size=12,
                         color=T.TEXT_2,
                     ),
@@ -2330,36 +2420,34 @@ def _main(page: ft.Page):
         try:
             folders = demo_state["sync"].ensure_folders(path, demo)
         except Exception as ex:
-            show_snackbar(f"No se pudo usar esa carpeta: {ex}", T.DANGER_DEEP)
+            show_snackbar(tr("demo.folderFailed", error=ex), T.DANGER_DEEP)
             return
         demo_folder.value = path
         config.set("demo_folder", path)
         config.save()
         render_demo(demo)
-        add_log(f"Carpeta de la demo: {path}. Subcarpetas: {', '.join(f.name for f in folders)}", "success")
-        show_snackbar("Listo: copiá tus documentos en las subcarpetas y sincronizá", T.OK_DEEP)
+        add_log(tr("demo.folderLog", path=path, folders=", ".join(f.name for f in folders)), "success")
+        show_snackbar(tr("demo.folderReady"), T.OK_DEEP)
         page.update()
 
     def choose_demo_folder(e=None):
         def _pick():
-            path = demo_mode.choose_folder(demo_folder_path())
+            path = demo_mode.choose_folder(demo_folder_path(), tr("demo.chooseFolderTitle"))
             if path:
                 use_demo_folder(path)
             elif path is None:  # sin selector; "" es que se canceló
-                show_snackbar("Si no se abrió el selector, escribí la ruta de la carpeta y presioná Enter", T.WARN_DEEP)
+                show_snackbar(tr("demo.noPicker"), T.WARN_DEEP)
 
         threading.Thread(target=_pick, daemon=True).start()
 
     on_demo_sync = wrap_operation(
-        "Sincronizar",
+        "demoSync",
         lambda: demo_state["sync"].sync(demo_folder_path()),
         confirm=True,
-        dialog_title="Sincronizar",
-        dialog_msg="Se subirán los archivos nuevos de tus subcarpetas y se quitarán de InfoHub los que borraste. ¿Continuar?",
         show_progress=True,
     )
     on_demo_simulate = wrap_operation(
-        "Simular sincronización",
+        "demoSimulate",
         lambda: demo_state["sync"].simulate(demo_folder_path()),
     )
 
@@ -2370,24 +2458,22 @@ def _main(page: ft.Page):
                     demo_title,
                     demo_quota,
                     ft.Text(
-                        "1. Elegí una carpeta de tu equipo: se crea una subcarpeta por workspace. "
-                        "2. Copiá cada documento en la subcarpeta que le corresponda. "
-                        "3. Sincronizá. Para quitar un documento, borralo de la carpeta y volvé a sincronizar.",
+                        tr("demo.steps"),
                         size=13,
                         color=T.TEXT_2,
                     ),
                     ft.Row(
                         [
                             demo_folder,
-                            ft.OutlinedButton("Elegir carpeta", icon=Icons.FOLDER_OPEN_OUTLINED, on_click=choose_demo_folder),
+                            ft.OutlinedButton(tr("demo.chooseFolder"), icon=Icons.FOLDER_OPEN_OUTLINED, on_click=choose_demo_folder),
                         ],
                         spacing=8,
                     ),
                     demo_workspaces,
                     ft.Row(
                         [
-                            T.primary_button("Sincronizar", Icons.CLOUD_SYNC_OUTLINED, on_demo_sync),
-                            ft.OutlinedButton("Simular", icon=Icons.FIND_IN_PAGE_OUTLINED, on_click=on_demo_simulate),
+                            T.primary_button(tr("demo.sync"), Icons.CLOUD_SYNC_OUTLINED, on_demo_sync),
+                            ft.OutlinedButton(tr("demo.simulate"), icon=Icons.FIND_IN_PAGE_OUTLINED, on_click=on_demo_simulate),
                         ],
                         spacing=8,
                     ),
@@ -2399,9 +2485,9 @@ def _main(page: ft.Page):
         visible=False,
     )
 
-    def enter_demo_mode(demo: dict):
+    def enter_demo_mode(demo: dict, quiet: bool = False):
         """Muestra el panel de la demo en lugar de las operaciones de administración."""
-        demo_state["sync"] = DemoSync(manager.base_url, manager.session_token, manager)
+        demo_state["sync"] = DemoSync(manager.base_url, manager.session_token, manager, tr)
         manager.image_description_active = False
         render_demo(demo)
         demo_section.visible = True
@@ -2410,7 +2496,8 @@ def _main(page: ft.Page):
         # espera el botón de configuración para empezar, así que no se abre solo.
         config_button.visible = False
         help_button.visible = False
-        add_log(f"Modo demo: {len(demo.get('workspaces', []))} workspaces de {demo.get('company', '')}", "info")
+        if not quiet:
+            add_log(tr("demo.modeLog", count=len(demo.get("workspaces", [])), company=demo.get("company", "")), "info")
         if demo_folder_path():
             use_demo_folder(demo_folder_path())
         page.update()
@@ -2423,7 +2510,7 @@ def _main(page: ft.Page):
         content=ft.IconButton(
             icon=Icons.SETTINGS_OUTLINED,
             icon_color=T.TEXT,
-            tooltip="Configuración",
+            tooltip=tr("bar.settings"),
             on_click=open_config_editor,
         ),
     )
@@ -2434,7 +2521,7 @@ def _main(page: ft.Page):
         content=ft.IconButton(
             icon=Icons.HELP_OUTLINE,
             icon_color=T.TEXT,
-            tooltip="Ver recorrido",
+            tooltip=tr("bar.tour"),
         ),
     )
 
@@ -2453,7 +2540,7 @@ def _main(page: ft.Page):
                         content=ft.IconButton(
                             icon=Icons.HOME_OUTLINED,
                             icon_color=T.TEXT,
-                            tooltip="Volver al inicio de InfoHub",
+                            tooltip=tr("bar.home"),
                             on_click=lambda e: go_to_portal(),
                         ),
                     )
@@ -2464,12 +2551,13 @@ def _main(page: ft.Page):
             ft.IconButton(
                 icon=Icons.REFRESH_OUTLINED,
                 icon_color=T.TEXT,
-                tooltip="Actualizar Estado",
+                tooltip=tr("bar.refresh"),
                 on_click=lambda e: (
-                    set_status("Sistema listo", T.OK),
-                    show_snackbar("Estado actualizado", T.OK_DEEP),
+                    set_status(tr("status.ready"), T.OK),
+                    show_snackbar(tr("status.refreshed"), T.OK_DEEP),
                 ),
             ),
+            ft.Container(content=language_dropdown(), padding=ft.padding.Padding.symmetric(horizontal=4)),
             config_button,
             help_button,
         ],
@@ -2480,46 +2568,46 @@ def _main(page: ft.Page):
         [
             create_operation_card(
                 Icons.CLOUD_SYNC_OUTLINED,
-                "Carga Completa y Limpieza",
-                "Sincronizacion completa: subir, actualizar y eliminar documentos huerfanos",
+                tr("ops.full.title"),
+                tr("ops.full.description"),
                 on_full_upload,
                 T.TEAL,
                 tour_id="tour:op-full",
             ),
             create_operation_card(
                 Icons.FIND_IN_PAGE_OUTLINED,
-                "Simular Limpieza",
-                "Ver qué borraría y qué subiría la carga completa, sin cambiar nada",
+                tr("ops.simulate.title"),
+                tr("ops.simulate.description"),
                 on_simulate_clean,
                 T.ACCENT_HOVER,
                 tour_id="tour:op-simulate",
             ),
             create_operation_card(
                 Icons.SYNC_OUTLINED,
-                "Actualizar Espacios de Trabajo",
-                "Generar descripciones de imagenes con IA y subir archivos a workspaces",
+                tr("ops.sort.title"),
+                tr("ops.sort.description"),
                 on_sort_files,
                 T.ACCENT_HOVER,
             ),
             create_operation_card(
                 Icons.CLEANING_SERVICES_OUTLINED,
-                "Limpiar Carpetas",
-                "Eliminar workspaces vacios de InfoHub",
+                tr("ops.clean.title"),
+                tr("ops.clean.description"),
                 on_clean_folders,
                 T.WARN,
             ),
             create_operation_card(
                 Icons.SEARCH_OUTLINED,
-                "Escanear Archivos",
-                "Previsualizar contenido de carpetas sin subir",
+                tr("ops.scan.title"),
+                tr("ops.scan.description"),
                 on_scan_files,
                 T.TEAL,
                 tour_id="tour:op-scan",
             ),
             create_operation_card(
                 Icons.IMAGE_OUTLINED,
-                "Descripciones de Imagenes",
-                "Generar descripciones con IA para imagenes sin descripcion",
+                tr("ops.images.title"),
+                tr("ops.images.description"),
                 on_create_image_descriptions,
                 T.WARN,
                 tour_id="tour:op-images",
@@ -2538,13 +2626,13 @@ def _main(page: ft.Page):
                             ft.Row(
                                 [
                                     ft.Icon(Icons.TERMINAL_OUTLINED, color=T.TEXT_2, size=18),
-                                    ft.Text("Registro de Operaciones", size=14, weight=ft.FontWeight.BOLD, color=T.TEXT),
+                                    ft.Text(tr("logs.title"), size=14, weight=ft.FontWeight.BOLD, color=T.TEXT),
                                 ],
                                 spacing=8,
                             ),
                             ft.Container(expand=True),
                             ft.TextButton(
-                                "Limpiar",
+                                tr("logs.clear"),
                                 icon=Icons.CLEAR_ALL_OUTLINED,
                                 on_click=clear_logs,
                             ),
@@ -2593,7 +2681,7 @@ def _main(page: ft.Page):
                         [
                             ft.Row(
                                 [
-                                    ft.Text("Operaciones", size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
+                                    ft.Text(tr("ops.title"), size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
                                     ft.Container(expand=True),
                                     ft.Text(
                                         f"v1.0 | {datetime.now().strftime('%Y-%m-%d')}",
@@ -2642,16 +2730,32 @@ def _main(page: ft.Page):
 
     # Funciones opcionales que activa la licencia de InfoHub (features.py). Sin
     # API key (p. ej. un prospecto de una demo) no hay a quién preguntar.
+    if not first_build:
+        # Cambio de idioma: se repone lo que había (registro, modo demo).
+        for timestamp, message, level in list(session["logs"]):
+            add_log(message, level, timestamp=timestamp, remember=False)
+        if signed_in and session["demo"]:
+            enter_demo_mode(session["demo"], quiet=True)
+        page.update()
+        return
+
     current_features = (
         features.fetch_features(manager.base_url, manager.api_key, timeout=5) if manager.api_key else []
     )
 
     # Initial log
-    add_log("Sistema iniciado correctamente", "success")
+    add_log(tr("logs.started"), "success")
     add_log(
-        f"Conectado a: {manager.base_url} (funciones: {', '.join(current_features) or 'ninguna'})",
+        tr("logs.connected", url=manager.base_url,
+           features=", ".join(current_features) or tr("logs.noFeatures")),
         "info",
     )
+
+    # Idioma de la instancia: llega en segundo plano para no demorar el arranque.
+    threading.Thread(
+        target=lambda: apply_instance_language(i18n.fetch_instance_language(manager.base_url)),
+        daemon=True,
+    ).start()
 
     if sso_ticket:
         _handle_ticket_login(sso_ticket)

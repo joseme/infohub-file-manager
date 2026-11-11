@@ -16,7 +16,7 @@
 
   // Sin `anchor`, el paso es un mensaje centrado. Con `optional`, el paso se
   // omite si el control no está en pantalla (el botón de inicio depende de PORTAL_URL).
-  const STEPS = [
+  const STEPS_ES = [
     {
       title: "Bienvenido a InfoHub File Manager",
       description:
@@ -86,6 +86,104 @@
       description: "Desde este botón puedes ver el recorrido otra vez cuando quieras.",
     },
   ];
+
+  const STEPS_EN = [
+    {
+      title: "Welcome to InfoHub File Manager",
+      description:
+        "Syncs a folder on your computer with InfoHub. Each subfolder is a workspace: " +
+        "whatever you put there is uploaded, updated or deleted in InfoHub. Let me show you the panel.",
+    },
+    {
+      anchor: "tour:status",
+      title: "Status",
+      description: "Shows whether the system is ready or an operation is running.",
+    },
+    {
+      anchor: "tour:stats",
+      title: "Summary",
+      description:
+        "Workspaces and files in your folders, how many were uploaded in the last " +
+        "operation and how many are still pending.",
+    },
+    {
+      anchor: "tour:config",
+      title: "Settings",
+      description:
+        "Root folder, InfoHub connection, protected workspaces and Ollama to describe " +
+        "images. The first time, start here.",
+    },
+    {
+      anchor: "tour:op-scan",
+      title: "Scan files",
+      description:
+        "Checks your folders without uploading anything. Use it to confirm which workspaces and files the tool sees.",
+    },
+    {
+      anchor: "tour:op-simulate",
+      title: "Simulate cleanup",
+      description:
+        "Shows, per workspace, what the full upload would delete and upload, without changing anything " +
+        "in InfoHub. Use it before every full upload.",
+    },
+    {
+      anchor: "tour:op-full",
+      title: "Full upload and cleanup",
+      description:
+        "Uploads new files, updates the modified ones and deletes from InfoHub what you removed " +
+        "on your computer. It asks for confirmation before starting.",
+    },
+    {
+      anchor: "tour:op-images",
+      title: "Image descriptions",
+      description:
+        "Generates a text for each image with AI, so you can find it by asking InfoHub. " +
+        "Only that text is uploaded to InfoHub.",
+    },
+    {
+      anchor: "tour:logs",
+      title: "Operations log",
+      description: "Each operation leaves its result and its errors here.",
+    },
+    {
+      anchor: "tour:home",
+      optional: true,
+      title: "Back to InfoHub",
+      description: "Returns to the InfoHub portal.",
+    },
+    {
+      anchor: "tour:help",
+      title: "Repeat the tour",
+      description: "Use this button to see the tour again whenever you want.",
+    },
+  ];
+
+  // Idioma: el que guarda app.py en shared_preferences (localStorage de
+  // Flutter web, claves con prefijo «flutter.» y valor en JSON): primero la
+  // elección del usuario, después el de la instancia, si no español.
+  function readPref(key) {
+    try {
+      const raw = localStorage.getItem("flutter." + key);
+      if (raw == null) return null;
+      try { return JSON.parse(raw); } catch (e) { return raw; }
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function language() {
+    for (const key of ["infohubFm.language", "infohubFm.instanceLanguage"]) {
+      const lang = readPref(key);
+      if (lang === "es" || lang === "en") return lang;
+    }
+    return "es";
+  }
+
+  const BUTTONS = {
+    es: { next: "Siguiente", prev: "Anterior", done: "Finalizar", progress: "{{current}} de {{total}}" },
+    en: { next: "Next", prev: "Previous", done: "Done", progress: "{{current}} of {{total}}" },
+  };
+  const STEPS_BY_LANG = { es: STEPS_ES, en: STEPS_EN };
 
   // Ancla que debe existir para dar el panel por cargado.
   const READY_ANCHOR = "tour:config";
@@ -193,7 +291,9 @@
       return;
     }
 
-    const steps = STEPS.filter((s) => !s.optional || document.querySelector(anchorSelector(s.anchor)));
+    const lang = language();
+    const buttons = BUTTONS[lang];
+    const steps = STEPS_BY_LANG[lang].filter((s) => !s.optional || document.querySelector(anchorSelector(s.anchor)));
     const selectors = steps.map((s) => (s.anchor ? anchorSelector(s.anchor) : null));
 
     async function goTo(index) {
@@ -208,10 +308,10 @@
       overlayOpacity: 0.55,
       stagePadding: 6,
       stageRadius: 8,
-      nextBtnText: "Siguiente",
-      prevBtnText: "Anterior",
-      doneBtnText: "Finalizar",
-      progressText: "{{current}} de {{total}}",
+      nextBtnText: buttons.next,
+      prevBtnText: buttons.prev,
+      doneBtnText: buttons.done,
+      progressText: buttons.progress,
       steps: steps.map((s, i) => ({
         // Selector (no nodo): driver.js lo resuelve al mostrar cada paso,
         // y Flutter recrea los nodos de semántica al redibujar.

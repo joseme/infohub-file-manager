@@ -93,4 +93,5 @@ class ConfigManager:
 
     @staticmethod
     def get_schema():
-        return FIELDS_SCHEMA
+        # Copia: quien la modifique no altera el esquema compartido.
+        return [dict(field) for field in FIELDS_SCHEMA]

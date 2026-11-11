@@ -24,6 +24,8 @@ import os
 import pathlib
 from typing import Callable, Iterable, Optional
 
+from i18n import Translator
+
 log = logging.getLogger(__name__)
 
 BASE = pathlib.Path(__file__).resolve().parent
@@ -35,23 +37,24 @@ MINIMO_DEFECTO = 10
 
 def evaluar_borrado(locales: int, remotos: int, huerfanos: int,
                     umbral_pct: float = UMBRAL_PCT_DEFECTO,
-                    minimo: int = MINIMO_DEFECTO) -> Optional[str]:
+                    minimo: int = MINIMO_DEFECTO,
+                    tr: Optional[Translator] = None) -> Optional[str]:
     """Devuelve el motivo para bloquear el borrado de huérfanos, o None si se permite.
 
     - locales: archivos locales de la carpeta (tras filtros).
     - remotos: documentos del workspace en el servidor.
     - huerfanos: cuántos de ellos se borrarían.
     """
+    tr = tr or Translator()
     if huerfanos <= 0:
         return None
     if locales <= 0:
-        return (f"la carpeta local está vacía y se borrarían {huerfanos} documentos "
-                f"(¿montaje caído o disco desconectado?)")
+        return tr("guard.emptyFolder", orphans=huerfanos)
     if remotos > 0 and huerfanos > minimo:
         pct = huerfanos * 100 / remotos
         if pct > umbral_pct:
-            return (f"se borrarían {huerfanos} de {remotos} documentos ({pct:.0f} %), "
-                    f"más del umbral de {umbral_pct:g} %")
+            return tr("guard.threshold", orphans=huerfanos, remote=remotos,
+                      pct=f"{pct:.0f}", limit=tr.number(umbral_pct))
     return None
 
 
@@ -71,15 +74,16 @@ def montaje_caido(carpeta, montajes: Iterable) -> bool:
     return False
 
 
-def raiz_accesible(raiz) -> Optional[str]:
+def raiz_accesible(raiz, tr: Optional[Translator] = None) -> Optional[str]:
     """Motivo si la carpeta raíz no se puede listar; None si está bien."""
+    tr = tr or Translator()
     raiz = pathlib.Path(raiz)
     try:
         if not raiz.is_dir():
-            return f"no existe la carpeta raíz {raiz}"
+            return tr("guard.noRoot", root=raiz)
         os.listdir(raiz)
     except OSError as e:
-        return f"la carpeta raíz {raiz} no es accesible ({e})"
+        return tr("guard.rootInaccessible", root=raiz, error=e)
     return None
 
 
