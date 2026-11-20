@@ -101,8 +101,8 @@ IMAGE_DESCRIPTION_ACTIVATE=true
 APP_PORT=8500
 APP_TITLE=InfoHub File Manager
 
-# Watched Folders Configuration
-WATCHED_FOLDERS_ROOT=/home/usuario/Documentos/infohub
+# Carpeta a sincronizar (sus subcarpetas son los workspaces)
+WATCHED_FOLDERS_ROOT=/home/usuario/Documentos/Infohub
 
 # Logging
 LOG_LEVEL=INFO
@@ -119,26 +119,26 @@ LOG_FILE=infohub.log
 
 ## 📁 Estructura de carpetas esperada
 
-El programa escanea carpetas cuyo nombre comience con **`Infohub`** o **`AnythingLLM`**. Dentro de cada una, las **subcarpetas** se convierten en workspaces.
+Eliges **una carpeta a sincronizar** (nombre libre) desde **⚙️ Configuración → Carpeta a sincronizar** (botón de carpeta) o con `WATCHED_FOLDERS_ROOT`. Cada **subcarpeta** de esa carpeta se convierte en un workspace.
 
 ```
-/home/usuario/Documentos/infohub/
-└── Infohub_MisDocumentos/
-    ├── Trabajo/
-    │   ├── informe.pdf
-    │   └── presentacion.pptx
-    │   └── Sub/
-    │       └── archivo.pdf
-    ├── Personal/
-    │   ├── notas.txt
-    │   └── foto_playa.jpg
-    └── Impuestos_2024/
-        └── declaracion.pdf
+/home/usuario/Documentos/Infohub/        ← carpeta a sincronizar (cualquier nombre)
+├── Trabajo/
+│   ├── informe.pdf
+│   └── presentacion.pptx
+│   └── Sub/
+│       └── archivo.pdf
+├── Personal/
+│   ├── notas.txt
+│   └── foto_playa.jpg
+└── Impuestos_2024/
+    └── declaracion.pdf
 ```
 
-- `Trabajo`, `Personal` e `Impuestos_2024` se crearán como workspaces en AnythingLLM.
+- `Trabajo`, `Personal` e `Impuestos_2024` se crean como workspaces en AnythingLLM si no existen.
 - Las **subcarpetas dentro de un workspace** (ej. `Trabajo/Sub/`) también se suben como archivos internos del workspace, **preservando la carpeta en el nombre remoto**: `Trabajo/Sub/archivo.pdf` se sube como `Sub__archivo.pdf`. Así, dos subcarpetas distintas con el mismo nombre de archivo (`A/informe.pdf` y `B/informe.pdf`) ya **no colisionan**.
-- Los archivos colocados directamente en `Infohub_MisDocumentos` (sin subcarpeta) siguen **ignorados**.
+- Los archivos colocados directamente en la carpeta a sincronizar (sin subcarpeta) siguen **ignorados**.
+- Las carpetas ocultas (`.algo`) se ignoran.
 - Los archivos `.image_description` y `.image_description.txt` están **excluidos** (son textos generados por la app, no documentos a subir).
 
 > ℹ️ InfoHub/AnythingLLM **no admite carpetas anidadas reales** (su almacenamiento es `carpeta/archivo.json`), por eso la subcarpeta se codifica en el nombre del archivo con el separador `__`.
@@ -259,7 +259,7 @@ curl http://localhost:11434/api/tags
 ## 🛠️ Solución de Problemas
 
 **"Los archivos no aparecen en InfoHub"**
-- Verifica que estén dentro de una **subcarpeta** (no en la raíz de `Infohub_*`).
+- Verifica que estén dentro de una **subcarpeta** (no en la raíz de la carpeta a sincronizar).
 - Comprueba que `ANYTHINGLLM_API_KEY` y `ANYTHINGLLM_BASE_URL` sean correctos.
 - Revisa los logs en `infohub.log`.
 

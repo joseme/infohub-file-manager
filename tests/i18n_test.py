@@ -77,9 +77,9 @@ def test_mensajes_del_manager_en_ingles(tmp_path):
     with patch.dict("os.environ", {"WATCHED_FOLDERS_ROOT": ""}):
         mgr = InfoHubFileManager({"watched_folders_root": ""})
     mgr.tr = Translator("en")
-    assert mgr.scan_files()["message"] == "The watched root folder is not configured (WATCHED_FOLDERS_ROOT)"
+    assert mgr.scan_files()["message"] == "The folder to sync is not configured (WATCHED_FOLDERS_ROOT)"
     mgr.watched_root = str(tmp_path / "nope")
-    assert mgr.scan_files()["message"].startswith("The root folder does not exist")
+    assert mgr.scan_files()["message"].startswith("The folder to sync does not exist")
 
 
 def test_guardas_en_ingles(tmp_path):

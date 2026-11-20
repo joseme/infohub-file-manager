@@ -12,8 +12,26 @@ services:
     environment:
       # Public URL of the InfoHub portal ("Inicio" button). Empty hides it.
       PORTAL_URL: ${PORTAL_URL:-}
+      # Dentro del contenedor 127.0.0.1 no es el host: se habla con InfoHub por
+      # su alias en la red compartida (env manda sobre config.json, ver app.py).
+      ANYTHINGLLM_BASE_URL: ${ANYTHINGLLM_BASE_URL:-http://infohub:3001}
+      # ~ dentro del contenedor = home del host, para que la raíz observada
+      # (~/Documentos) sea la misma ruta que en escritorio.
+      HOME: ${HOME}
     volumes:
+      # Bind de archivo: si lo reescribes desde el host, el contenedor sigue
+      # leyendo el inodo viejo hasta `docker compose restart`.
       - "./config.json:/app/config.json"
+      # Home completo: la carpeta a sincronizar se elige desde el panel y puede
+      # estar en cualquier sitio (~/Documents, ~/Documentos, …).
+      - "${HOME}:${HOME}"
       - "./infohub.log:/app/infohub.log"
       - "./data:/data"
     restart: unless-stopped
+    networks:
+      - infohub
+
+networks:
+  infohub:
+    external: true
+    name: infohub_info-hub

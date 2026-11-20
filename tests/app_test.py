@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from app import InfoHubFileManager
+from app import InfoHubFileManager, child_dirs, home_relative
 from workspace_map import slug_naive
 
 
@@ -97,47 +97,44 @@ def manager_without_config():
 
 @pytest.fixture
 def watched_dir(tmp_path: Path):
-    """Create a temporary watched directory with sample folder structure.
+    """Carpeta a sincronizar (nombre libre); sus subcarpetas son los workspaces.
 
     Structure:
-        tmp_path/Infohub_Tech/
+        tmp_path/sync-2024/
             WorkspaceA/
                 doc1.pdf
                 doc2.txt
                 image1.jpg
             WorkspaceB/
                 report.docx
-        tmp_path/AnythingLLM_Team/
             TeamSpace/
                 notes.md
     """
-    # Create Infohub_Tech workspace folders
-    (tmp_path / "Infohub_Tech" / "WorkspaceA").mkdir(parents=True)
-    (tmp_path / "Infohub_Tech" / "WorkspaceB").mkdir(parents=True)
-    (tmp_path / "AnythingLLM_Team" / "TeamSpace").mkdir(parents=True)
+    root = tmp_path / "sync-2024"
+    (root / "WorkspaceA").mkdir(parents=True)
+    (root / "WorkspaceB").mkdir()
+    (root / "TeamSpace").mkdir()
 
-    # Create sample files
     for fname in ["doc1.pdf", "doc2.txt", "image1.jpg"]:
-        (tmp_path / "Infohub_Tech" / "WorkspaceA" / fname).write_text("content")
-    (tmp_path / "Infohub_Tech" / "WorkspaceB" / "report.docx").write_text("content")
-    (tmp_path / "AnythingLLM_Team" / "TeamSpace" / "notes.md").write_text("content")
-    return tmp_path
+        (root / "WorkspaceA" / fname).write_text("content")
+    (root / "WorkspaceB" / "report.docx").write_text("content")
+    (root / "TeamSpace" / "notes.md").write_text("content")
+    return root
 
 
 @pytest.fixture
 def recursive_dir(tmp_path: Path):
-    """Own subdir with a nested workspace tree for recursive scan tests.
+    """Carpeta a sincronizar con un workspace y subcarpetas internas.
 
     Structure:
-        base/Infohub_Tech/WorkspaceA/
+        base/WorkspaceA/
             doc1.pdf
-            doc3.pdf.image_description.txt
             Sub/
                 doc3.pdf
+                doc3.pdf.image_description.txt
     """
     base = tmp_path / "recursive_root"
-    base.mkdir()
-    ws = base / "Infohub_Tech" / "WorkspaceA"
+    ws = base / "WorkspaceA"
     (ws / "Sub").mkdir(parents=True)
     (ws / "doc1.pdf").write_text("content")
     (ws / "Sub" / "doc3.pdf").write_text("content")
@@ -234,7 +231,7 @@ class TestScanFiles:
 
     def test_scan_image_description_files_excluded(self, manager, watched_dir):
         """Files ending with .image_description or .image_description.txt should be excluded."""
-        ws_a = watched_dir / "Infohub_Tech" / "WorkspaceA"
+        ws_a = watched_dir / "WorkspaceA"
         (ws_a / "photo.jpg.image_description.txt").write_text("a description")
         (ws_a / "photo.jpg.image_description").write_text("another")
 
@@ -247,38 +244,49 @@ class TestScanFiles:
 
     def test_scan_empty_workspace(self, manager, watched_dir):
         """A workspace folder with no files should appear with file_count=0."""
-        (watched_dir / "Infohub_Tech" / "EmptyWS").mkdir()
+        (watched_dir / "EmptyWS").mkdir()
         manager.watched_root = str(watched_dir)
         result = manager.scan_files()
 
         assert "EmptyWS" in result["workspaces"]
         assert result["workspaces"]["EmptyWS"]["file_count"] == 0
 
-    def test_scan_non_prefixed_folders_ignored(self, manager, watched_dir):
-        """Folders not starting with Infohub or AnythingLLM should be ignored."""
-        (watched_dir / "OtherFolder" / "SomeWS").mkdir(parents=True)
-        (watched_dir / "OtherFolder" / "SomeWS" / "file.txt").write_text("data")
+    def test_scan_cualquier_nombre_de_carpeta_es_workspace(self, manager, watched_dir):
+        """La carpeta a sincronizar puede llamarse como sea; sus subcarpetas son workspaces."""
+        (watched_dir / "Proyecto 2026").mkdir()
+        (watched_dir / "Proyecto 2026" / "file.txt").write_text("data")
         manager.watched_root = str(watched_dir)
         result = manager.scan_files()
 
-        assert "SomeWS" not in result["workspaces"]
+        assert "Proyecto 2026" in result["workspaces"]
+        assert result["workspaces"]["Proyecto 2026"]["file_count"] == 1
 
-    def test_scan_deduplicates_across_parent_dirs(self, manager, watched_dir):
-        """Same workspace name under two matching parents should appear once."""
-        # watched_dir already has Infohub_Tech/WorkspaceA with 3 files
-        # Create a second matching parent with same workspace name
-        (watched_dir / "Infohub_Backup" / "WorkspaceA").mkdir(parents=True)
-        (watched_dir / "Infohub_Backup" / "WorkspaceA" / "extra.txt").write_text("x")
-
-        manager.watched_root = str(watched_dir)
+    def test_scan_sin_subcarpetas_avisa(self, manager, tmp_path):
+        vacia = tmp_path / "vacia"
+        vacia.mkdir()
+        manager.watched_root = str(vacia)
         result = manager.scan_files()
 
-        # WorkspaceA appears under Infohub_Tech and Infohub_Backup
-        assert "WorkspaceA" in result["workspaces"]
-        # Should appear only ONCE (deduplication)
-        # total_files must NOT double-count WorkspaceA
-        total_from_dict = sum(ws["file_count"] for ws in result["workspaces"].values())
-        assert result["total_files"] == total_from_dict
+        assert result["status"] == "warning"
+        assert str(vacia) in result["message"]
+
+    def test_scan_carpeta_inexistente_es_error(self, manager, tmp_path):
+        manager.watched_root = str(tmp_path / "no-existe")
+        result = manager.scan_files()
+
+        assert result["status"] == "error"
+        assert "no existe" in result["message"]
+
+    def test_sort_carpeta_sin_permiso_de_escritura_es_error(self, manager, watched_dir):
+        watched_dir.chmod(0o500)
+        try:
+            manager.watched_root = str(watched_dir)
+            result = manager.sort_files()
+        finally:
+            watched_dir.chmod(0o700)
+
+        assert result["status"] == "error"
+        assert "escritura" in result["message"]
 
     def test_scan_recursive_lists_internal(self, manager, recursive_dir):
         """Files nested in subfolders are returned with relative paths."""
@@ -297,6 +305,36 @@ class TestScanFiles:
 
         ws_files = result["workspaces"]["WorkspaceA"]["files"]
         assert "Sub/doc3.pdf.image_description.txt" not in ws_files
+
+
+# ---------------------------------------------------------------------------
+# selector de carpeta
+# ---------------------------------------------------------------------------
+
+
+class TestFolderPicker:
+    def test_child_dirs_ignora_ocultas_y_archivos(self, tmp_path):
+        (tmp_path / "beta").mkdir()
+        (tmp_path / "Alfa").mkdir()
+        (tmp_path / ".oculta").mkdir()
+        (tmp_path / "nota.txt").write_text("x")
+
+        assert [p.name for p in child_dirs(tmp_path)] == ["Alfa", "beta"]
+
+    def test_child_dirs_carpeta_ilegible_devuelve_vacio(self, tmp_path):
+        d = tmp_path / "sin-permiso"
+        d.mkdir()
+        d.chmod(0o000)
+        try:
+            assert child_dirs(d) == []
+        finally:
+            d.chmod(0o700)
+
+    def test_home_relative(self):
+        home = Path.home()
+        assert home_relative(home) == "~"
+        assert home_relative(home / "Documentos") == "~/Documentos"
+        assert home_relative(Path("/var/tmp")) == "/var/tmp"
 
 
 # ---------------------------------------------------------------------------
@@ -1211,7 +1249,7 @@ class TestUploadFileToWorkspace:
 
     def test_upload_uses_folder_qualified_name(self, manager, recursive_dir):
         """Uploaded filename should be folder-qualified: Sub/informe.pdf → Sub__informe.pdf."""
-        ws_folder = recursive_dir / "Infohub_Tech" / "WorkspaceA"
+        ws_folder = recursive_dir / "WorkspaceA"
         file_path = ws_folder / "Sub" / "informe.pdf"
         file_path.write_text("content")
 
@@ -1231,7 +1269,7 @@ class TestUploadFileToWorkspace:
 
     def test_upload_same_stem_two_subfolders_both_upload(self, manager, recursive_dir):
         """Same stem in two subfolders must both upload with distinct remote names."""
-        ws_folder = recursive_dir / "Infohub_Tech" / "WorkspaceA"
+        ws_folder = recursive_dir / "WorkspaceA"
         (ws_folder / "SubA").mkdir()
         (ws_folder / "SubB").mkdir()
         file_a = ws_folder / "SubA" / "informe.pdf"
@@ -1357,14 +1395,14 @@ class TestSortFiles:
                         }):
                             result = manager.sort_files()
 
-        ws_a = watched_dir / "Infohub_Tech" / "WorkspaceA"
+        ws_a = watched_dir / "WorkspaceA"
         desc_file = ws_a / "image1.jpg.image_description.txt"
         assert desc_file.exists()
         assert desc_file.read_text() == desc_text
 
     def test_sort_skips_existing_description(self, manager, watched_dir):
         """If .image_description.txt exists, skip description generation."""
-        ws_a = watched_dir / "Infohub_Tech" / "WorkspaceA"
+        ws_a = watched_dir / "WorkspaceA"
         existing_desc = ws_a / "image1.jpg.image_description.txt"
         existing_desc.write_text("existing desc")
 
@@ -1387,7 +1425,7 @@ class TestSortFiles:
 
     def test_sort_creates_workspace_for_empty_folder(self, manager, watched_dir):
         """An empty local workspace folder should still create the remote workspace."""
-        (watched_dir / "Infohub_Tech" / "EmptyWS").mkdir()
+        (watched_dir / "EmptyWS").mkdir()
         manager.watched_root = str(watched_dir)
 
         def mock_get_docs(ws_name):
@@ -1507,10 +1545,10 @@ class TestFullUploadAndClean:
     def test_protected_workspace_is_neither_synced_nor_cleaned(self, manager, tmp_path):
         """tributacion y odoo17 se cargan aparte: el file manager no los toca aunque
         haya una carpeta local con ese nombre y documentos remotos que no coinciden."""
-        (tmp_path / "Infohub" / "tributacion").mkdir(parents=True)
-        (tmp_path / "Infohub" / "tributacion" / "otra.pdf").write_text("x")
-        (tmp_path / "Infohub" / "WorkspaceA").mkdir(parents=True)
-        (tmp_path / "Infohub" / "WorkspaceA" / "doc1.pdf").write_text("x")
+        (tmp_path / "tributacion").mkdir()
+        (tmp_path / "tributacion" / "otra.pdf").write_text("x")
+        (tmp_path / "WorkspaceA").mkdir()
+        (tmp_path / "WorkspaceA" / "doc1.pdf").write_text("x")
         manager.watched_root = str(tmp_path)
 
         def mock_get_docs(ws_name):
@@ -1566,7 +1604,7 @@ class TestFullUploadAndClean:
 
     def test_full_upload_creates_workspace_for_empty_folder(self, manager, watched_dir):
         """An empty local workspace folder should still create the remote workspace."""
-        (watched_dir / "Infohub_Tech" / "EmptyWS").mkdir()
+        (watched_dir / "EmptyWS").mkdir()
         manager.watched_root = str(watched_dir)
 
         def mock_get_docs(ws_name):
@@ -1586,7 +1624,7 @@ class TestFullUploadAndClean:
     def test_full_upload_recursive_no_false_orphans(self, manager, recursive_dir):
         """Same-stem files in different subfolders are not treated as orphans."""
         manager.watched_root = str(recursive_dir)
-        ws = recursive_dir / "Infohub_Tech" / "WorkspaceA"
+        ws = recursive_dir / "WorkspaceA"
         (ws / "SubA").mkdir()
         (ws / "SubB").mkdir()
         (ws / "SubA" / "informe.pdf").write_text("content")
@@ -1620,7 +1658,7 @@ class TestFullUploadAndClean:
     def test_full_upload_recursive_prefix_collision_selective_delete(self, manager, recursive_dir):
         """Deleting informe_final.pdf must not delete informe.pdf (prefix collision)."""
         manager.watched_root = str(recursive_dir)
-        ws = recursive_dir / "Infohub_Tech" / "WorkspaceA"
+        ws = recursive_dir / "WorkspaceA"
         (ws / "raiz").mkdir()
         (ws / "raiz" / "informe.pdf").write_text("content")
         (ws / "raiz" / "informe_final.pdf").write_text("content")
@@ -1711,7 +1749,7 @@ class TestCreateImageDescriptions:
         """Should generate descriptions for images without .image_description.txt."""
         manager.watched_root = str(watched_dir)
 
-        ws_a = watched_dir / "Infohub_Tech" / "WorkspaceA"
+        ws_a = watched_dir / "WorkspaceA"
         # Add another image that needs description
         (ws_a / "photo2.png").write_text("png data")
 
@@ -1733,7 +1771,7 @@ class TestCreateImageDescriptions:
         """Images that already have .image_description.txt should be skipped."""
         manager.watched_root = str(watched_dir)
 
-        ws_a = watched_dir / "Infohub_Tech" / "WorkspaceA"
+        ws_a = watched_dir / "WorkspaceA"
         existing = ws_a / "image1.jpg.image_description.txt"
         existing.write_text("existing desc")
 
@@ -1749,7 +1787,7 @@ class TestCreateImageDescriptions:
         """When some images fail, errors should be reported."""
         manager.watched_root = str(watched_dir)
 
-        ws_a = watched_dir / "Infohub_Tech" / "WorkspaceA"
+        ws_a = watched_dir / "WorkspaceA"
 
         def mock_generate(img_path):
             if "image1" in img_path.name:
@@ -1863,6 +1901,135 @@ class TestWorkspaceAccess:
             result = real_access_manager.get_accessible_workspace_names(["A", "B", "C"])
 
         assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# ensure_workspaces: crear workspaces de carpetas nuevas
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureWorkspaces:
+    def _post(self, status=201):
+        resp = MagicMock(spec=requests.Response)
+        resp.status_code = status
+        return resp
+
+    def test_crea_el_workspace_que_falta(self, manager):
+        with patch.object(manager, "get_accessible_workspace_names", return_value=set()), \
+                patch.object(manager, "is_workspace_accessible", return_value=True), \
+                patch("requests.post", return_value=self._post(201)) as post:
+            accesibles, avisos = manager.ensure_workspaces(["Nueva"])
+
+        assert accesibles == {"Nueva"}
+        assert avisos == {}
+        assert post.call_args.args[0].endswith("/api/v1/workspace/new")
+        assert post.call_args.kwargs["json"] == {"name": "Nueva"}
+
+    def test_sin_permiso_avisa_y_no_la_muestra(self, manager):
+        with patch.object(manager, "get_accessible_workspace_names", return_value=set()), \
+                patch.object(manager, "is_workspace_accessible", return_value=False), \
+                patch("requests.post", return_value=self._post(403)):
+            accesibles, avisos = manager.ensure_workspaces(["Nueva"])
+
+        assert accesibles == set()
+        assert "permiso" in avisos["Nueva"].lower()
+
+    def test_error_de_red_avisa(self, manager):
+        with patch.object(manager, "get_accessible_workspace_names", return_value=set()), \
+                patch("requests.post", side_effect=requests.ConnectionError("offline")):
+            accesibles, avisos = manager.ensure_workspaces(["Nueva"])
+
+        assert accesibles == set()
+        assert "offline" in avisos["Nueva"]
+
+    def test_workspace_protegido_no_se_crea(self, manager):
+        manager.protected_workspaces = {"nueva"}
+        with patch.object(manager, "get_accessible_workspace_names", return_value=set()), \
+                patch("requests.post") as post:
+            accesibles, avisos = manager.ensure_workspaces(["Nueva"])
+
+        post.assert_not_called()
+        assert accesibles == set()
+        assert avisos == {}
+
+    def test_fuera_del_alcance_del_usuario_no_se_crea(self, manager):
+        manager.allowed_workspaces = {"otro"}
+        with patch.object(manager, "get_accessible_workspace_names", return_value=set()), \
+                patch("requests.post") as post:
+            accesibles, avisos = manager.ensure_workspaces(["Nueva"])
+
+        post.assert_not_called()
+        assert accesibles == set()
+        assert avisos == {}
+
+    def test_creado_sin_acceso_avisa(self, manager):
+        with patch.object(manager, "get_accessible_workspace_names", return_value=set()), \
+                patch.object(manager, "is_workspace_accessible", return_value=False), \
+                patch("requests.post", return_value=self._post(201)):
+            accesibles, avisos = manager.ensure_workspaces(["Nueva"])
+
+        assert accesibles == set()
+        assert "acceso" in avisos["Nueva"].lower()
+
+    def test_scan_muestra_el_workspace_recien_creado(self, manager, watched_dir):
+        (watched_dir / "Nueva").mkdir()
+        manager.watched_root = str(watched_dir)
+
+        with patch.object(manager, "get_accessible_workspace_names",
+                          return_value={"WorkspaceA", "WorkspaceB", "TeamSpace"}), \
+                patch.object(manager, "is_workspace_accessible", return_value=True), \
+                patch("requests.post", return_value=self._post(201)):
+            result = manager.scan_files()
+
+        assert "Nueva" in result["workspaces"]
+        assert result["status"] == "success"
+
+    def test_scan_avisa_si_no_puede_crear(self, manager, watched_dir):
+        (watched_dir / "Nueva").mkdir()
+        manager.watched_root = str(watched_dir)
+
+        with patch.object(manager, "get_accessible_workspace_names",
+                          return_value={"WorkspaceA", "WorkspaceB", "TeamSpace"}), \
+                patch.object(manager, "is_workspace_accessible", return_value=False), \
+                patch("requests.post", return_value=self._post(403)):
+            result = manager.scan_files()
+
+        assert result["status"] == "warning"
+        assert "Nueva" in result["message"]
+        assert "Nueva" not in (result.get("workspaces") or {})
+
+    def test_sort_crea_y_sube_en_el_workspace_nuevo(self, manager, watched_dir):
+        nueva = watched_dir / "Nueva"
+        nueva.mkdir()
+        (nueva / "a.txt").write_text("x")
+        manager.watched_root = str(watched_dir)
+
+        with patch.object(manager, "get_accessible_workspace_names",
+                          return_value={"WorkspaceA", "WorkspaceB", "TeamSpace"}), \
+                patch.object(manager, "is_workspace_accessible", return_value=True), \
+                patch.object(manager, "image_description_active", False), \
+                patch.object(manager, "get_workspace_documents",
+                             return_value={"base_names": set(), "doc_names": {},
+                                           "raw_docs": [], "exists": True}), \
+                patch.object(manager, "upload_file_to_workspace",
+                             return_value=(True, False, "uploaded")) as upload, \
+                patch.object(manager, "_update_embeddings", return_value=True), \
+                patch("requests.post", return_value=self._post(201)):
+            result = manager.sort_files()
+
+        assert result["status"] == "success"
+        assert "Nueva" in [c.args[1] for c in upload.call_args_list]
+
+    def test_simulacion_no_crea_workspaces(self, manager, watched_dir):
+        (watched_dir / "Nueva").mkdir()
+        manager.watched_root = str(watched_dir)
+
+        with patch.object(manager, "get_accessible_workspace_names",
+                          return_value={"WorkspaceA", "WorkspaceB", "TeamSpace"}), \
+                patch("requests.post") as post:
+            manager.full_upload_and_clean(simular=True)
+
+        post.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2028,7 +2195,7 @@ class TestRecursiveE2ECrossCutting:
         Covers: recursive discovery, folder-qualified remote names, no false
         orphans, and prefix-safe selective deletion (informe_final vs informe).
         """
-        ws = recursive_dir / "Infohub_Tech" / "WorkspaceA"
+        ws = recursive_dir / "WorkspaceA"
         (ws / "SubA").mkdir()
         (ws / "SubB").mkdir()
         (ws / "raiz").mkdir()
