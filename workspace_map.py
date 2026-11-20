@@ -94,9 +94,12 @@ class WorkspaceResolver:
             index = self._ensure()
         except Exception:
             index = {}
-        for key in (canonical(name), canonical(slug_naive(name))):
-            if key and key in index:
-                return index[key], True
+        # El alias puede apuntar a un workspace que ya no existe (renombrado en
+        # el servidor): se prueba también el nombre de la carpeta local.
+        for candidate in (name, folder_name):
+            for key in (canonical(candidate), canonical(slug_naive(candidate))):
+                if key and key in index:
+                    return index[key], True
         return slug_naive(name), False
 
     def lista(self) -> dict:

@@ -234,8 +234,8 @@ def mgr_app(tmp_path):
 
 
 def _arbol(tmp_path, n):
-    ws = tmp_path / "Infohub" / "WS"
-    ws.mkdir(parents=True)
+    ws = tmp_path / "WS"
+    ws.mkdir()
     for i in range(n):
         (ws / f"f{i}.txt").write_text(str(i))
     return ws

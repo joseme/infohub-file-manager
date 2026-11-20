@@ -37,7 +37,7 @@ FIELDS_SCHEMA = [
     {"key": "ollama_base_url", "label": "URL Ollama", "type": "text"},
     {"key": "ollama_model", "label": "Modelo Ollama", "type": "text"},
     {"key": "image_description_active", "label": "Descripciones de Imagenes", "type": "bool"},
-    {"key": "watched_folders_root", "label": "Carpeta Raiz Observada", "type": "text"},
+    {"key": "watched_folders_root", "label": "Carpeta a sincronizar", "type": "text"},
     {"key": "protected_workspaces", "label": "Workspaces protegidos (separados por coma)", "type": "text"},
     {"key": "log_level", "label": "Nivel de Log", "type": "select", "options": ["DEBUG", "INFO", "WARNING", "ERROR"]},
     {"key": "log_file", "label": "Archivo de Log", "type": "text"},

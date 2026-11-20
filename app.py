@@ -68,6 +68,27 @@ EMBEDDINGS_WAIT_SECONDS = 300
 LOGIN_DISMISS_WAIT_SECONDS = 2
 
 
+def child_dirs(path: Path) -> list[Path]:
+    """Subcarpetas visibles de `path`, ordenadas por nombre ([] si no se puede leer)."""
+    try:
+        return sorted(
+            (p for p in Path(path).iterdir() if p.is_dir() and not p.name.startswith(".")),
+            key=lambda p: p.name.lower(),
+        )
+    except OSError:
+        return []
+
+
+def home_relative(path: Path) -> str:
+    """Ruta con ~ cuando está dentro del home (así se guarda en config.json)."""
+    path = Path(path)
+    try:
+        rel = path.relative_to(Path.home())
+    except ValueError:
+        return str(path)
+    return "~" if str(rel) == "." else f"~/{rel}"
+
+
 def _query_param(page: ft.Page, key: str) -> str:
     """Lee un parámetro de la query string de la página web ('' si no está)."""
     try:
@@ -96,7 +117,9 @@ class InfoHubFileManager:
             self.ollama_url = os.getenv("OLLAMA_BASE_URL") or config.get("ollama_base_url", "http://localhost:11434")
             self.ollama_model = os.getenv("OLLAMA_MODEL") or config.get("ollama_model", "llava:latest")
             self.image_description_active = config.get("image_description_active", True)
-            self.watched_root = os.getenv("WATCHED_FOLDERS_ROOT") or config.get("watched_folders_root", "")
+            self.watched_root = os.path.expanduser(
+                os.getenv("WATCHED_FOLDERS_ROOT") or config.get("watched_folders_root", "")
+            )
             protected = os.getenv("PROTECTED_WORKSPACES") or config.get(
                 "protected_workspaces", PROTECTED_WORKSPACES_DEFAULT
             )
@@ -108,7 +131,7 @@ class InfoHubFileManager:
             self.image_description_active = (
                 os.getenv("IMAGE_DESCRIPTION_ACTIVATE", "true").lower() == "true"
             )
-            self.watched_root = os.getenv("WATCHED_FOLDERS_ROOT", "")
+            self.watched_root = os.path.expanduser(os.getenv("WATCHED_FOLDERS_ROOT", ""))
             protected = os.getenv("PROTECTED_WORKSPACES") or PROTECTED_WORKSPACES_DEFAULT
         # Ya son slugs: se normalizan con la regla local, sin consultar el servidor
         # (el resolver todavía no existe y el constructor no debe hacer pedidos).
@@ -220,33 +243,40 @@ class InfoHubFileManager:
             logger.error(f"Error fetching user workspaces: {e}")
             return None
 
+    def _root_error(self, root_path: Path, need_write: bool = False) -> dict | None:
+        """Error de operación si la carpeta a sincronizar no sirve."""
+        if not root_path.is_dir():
+            return {
+                "status": "error",
+                "message": self.tr("result.rootMissing", path=self.watched_root),
+            }
+        if need_write and not os.access(root_path, os.W_OK):
+            return {
+                "status": "error",
+                "message": self.tr("result.rootNotWritable", path=self.watched_root),
+            }
+        return None
+
     def scan_files(self) -> dict:
         """Scan watched folders for files"""
         if not self.watched_root:
             return {"status": "error", "message": self.tr("result.rootNotConfigured")}
 
         root_path = Path(self.watched_root)
-        if not root_path.exists():
-            return {
-                "status": "error",
-                "message": self.tr("result.rootMissing", path=self.watched_root),
-            }
+        error = self._root_error(root_path)
+        if error:
+            return error
 
         workspaces = {}
-        for item in root_path.iterdir():
-            if item.is_dir() and (
-                item.name.startswith("Infohub") or item.name.startswith("AnythingLLM")
-            ):
-                for workspace_folder in item.iterdir():
-                    if workspace_folder.is_dir():
-                        workspaces.setdefault(workspace_folder.name, {
-                            "path": str(workspace_folder),
-                            "file_count": 0,
-                            "files": [],
-                        })
+        for workspace_folder in child_dirs(root_path):
+            workspaces.setdefault(workspace_folder.name, {
+                "path": str(workspace_folder),
+                "file_count": 0,
+                "files": [],
+            })
 
-        # Only include workspaces the API key can actually access
-        accessible = self.get_accessible_workspace_names(list(workspaces.keys()))
+        # Only include workspaces the API key can access; crea los que falten
+        accessible, avisos = self.ensure_workspaces(list(workspaces.keys()))
         workspaces = {name: data for name, data in workspaces.items() if name in accessible}
 
         for ws_name, ws_data in workspaces.items():
@@ -263,12 +293,17 @@ class InfoHubFileManager:
 
         total_files = sum(ws["file_count"] for ws in workspaces.values())
 
-        return {
+        result = self._creation_warnings({
             "status": "success",
             "workspaces": workspaces,
             "total_workspaces": len(workspaces),
             "total_files": total_files,
-        }
+        }, avisos)
+        if not workspaces:
+            return self._warn(
+                result, self.tr("result.noWorkspaceFolders", path=self.watched_root)
+            )
+        return result
 
     def get_workspace_slug(self, workspace_name: str) -> str:
         """Slug real del workspace en el servidor para un nombre de carpeta.
@@ -320,21 +355,87 @@ class InfoHubFileManager:
         except Exception:
             return False
 
+    def _in_scope(self, workspace_name: str) -> bool:
+        """Dentro de los workspaces que el servidor asignó al usuario logueado."""
+        return (
+            self.allowed_workspaces is None
+            or self.get_workspace_slug(workspace_name) in self.allowed_workspaces
+        )
+
     def get_accessible_workspace_names(self, folder_names: list) -> set:
         """Given local folder names, return only those accessible to the API key
         and permitted to the logged-in user."""
         accessible = set()
         for name in folder_names:
-            if (
-                self.allowed_workspaces is not None
-                and self.get_workspace_slug(name) not in self.allowed_workspaces
-            ):
+            if not self._in_scope(name):
                 continue
             # Sin API key el chequeo /v1 siempre fallaría y ocultaría todo;
             # el alcance ya está limitado por allowed_workspaces.
             if not self.api_key or self.is_workspace_accessible(name):
                 accessible.add(name)
         return accessible
+
+    def ensure_workspaces(self, folder_names: list) -> tuple[set, dict]:
+        """Accesibles para la API key, creando el workspace de las carpetas nuevas.
+
+        Devuelve (nombres_accesibles, {carpeta: motivo}). Protegidas y fuera del
+        alcance del usuario no se crean ni generan aviso.
+        """
+        accesibles = self.get_accessible_workspace_names(folder_names)
+        avisos = {}
+        for name in folder_names:
+            if name in accesibles or not self._in_scope(name) or self.is_protected(name):
+                continue
+            motivo = self._create_workspace_remote(name)
+            if motivo:
+                avisos[name] = motivo
+            elif self.is_workspace_accessible(name):
+                accesibles.add(name)
+            else:
+                avisos[name] = self.tr("result.createdNoAccess")
+        return accesibles, avisos
+
+    def _create_workspace_remote(self, name: str) -> str:
+        """Crea el workspace de una carpeta. Devuelve '' o el motivo del fallo."""
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/v1/workspace/new",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "accept": "application/json",
+                },
+                json={"name": name},
+                timeout=10,
+            )
+        except Exception as e:
+            logger.error(f"Error creating workspace '{name}': {e}")
+            return str(e)
+        if response.status_code in (200, 201):
+            logger.info(f"Created workspace '{name}'")
+            self._resolver = None  # el índice de slugs quedó viejo
+            return ""
+        if response.status_code in (401, 403):
+            logger.warning(f"No permission to create workspace '{name}': {response.status_code}")
+            return self.tr("result.createNoPermission")
+        logger.warning(
+            f"Failed to create workspace '{name}': {response.status_code} - {response.text}"
+        )
+        return f"HTTP {response.status_code}"
+
+    def _warn(self, result: dict, message: str) -> dict:
+        """Pasa el resultado a warning y añade el mensaje."""
+        result["status"] = "warning"
+        result["message"] = f"{result['message']} {message}" if result.get("message") else message
+        return result
+
+    def _creation_warnings(self, result: dict, avisos: dict) -> dict:
+        """Añade al resultado los workspaces que no se pudieron crear (status warning)."""
+        if not avisos:
+            return result
+        detalle = "; ".join(f"{name} ({motivo})" for name, motivo in avisos.items())
+        result["warnings"] = avisos
+        return self._warn(result, self.tr("result.workspaceCreateFailed", names=detalle))
 
     def get_workspace_documents(self, workspace_name: str) -> dict:
         """Get documents in a workspace.
@@ -817,11 +918,9 @@ class InfoHubFileManager:
                 }
 
             root_path = Path(self.watched_root)
-            if not root_path.exists():
-                return {
-                    "status": "error",
-                    "message": self.tr("result.rootMissing", path=self.watched_root),
-                }
+            error = self._root_error(root_path, need_write=True)
+            if error:
+                return error
 
             uploaded = 0
             skipped = 0
@@ -829,22 +928,15 @@ class InfoHubFileManager:
             images_skipped = 0
             image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
 
-            # Deduplicate workspaces by name across parent dirs
             workspaces_by_name = {}
-            for item in root_path.iterdir():
-                if item.is_dir() and (
-                    item.name.startswith("Infohub")
-                    or item.name.startswith("AnythingLLM")
-                ):
-                    for workspace_folder in item.iterdir():
-                        if workspace_folder.is_dir():
-                            workspaces_by_name.setdefault(workspace_folder.name, workspace_folder)
+            for workspace_folder in child_dirs(root_path):
+                workspaces_by_name.setdefault(workspace_folder.name, workspace_folder)
 
             # Protected workspaces are managed outside the file manager.
             workspaces_by_name, protegidos = self._skip_protected(workspaces_by_name)
 
-            # Only process workspaces the API key can access
-            accessible = self.get_accessible_workspace_names(list(workspaces_by_name.keys()))
+            # Only process workspaces the API key can access; crea los que falten
+            accessible, avisos = self.ensure_workspaces(list(workspaces_by_name.keys()))
             workspaces_by_name = {
                 name: folder for name, folder in workspaces_by_name.items() if name in accessible
             }
@@ -890,7 +982,7 @@ class InfoHubFileManager:
                               described=images_processed, existing=images_skipped)
             if protegidos:
                 message += self.tr("result.protected", names=", ".join(protegidos))
-            return {
+            return self._creation_warnings({
                 "status": "success",
                 "message": message,
                 "uploaded": uploaded,
@@ -898,7 +990,7 @@ class InfoHubFileManager:
                 "images_processed": images_processed,
                 "images_skipped": images_skipped,
                 "protected": protegidos,
-            }
+            }, avisos)
         except Exception as e:
             logger.error(f"Error sorting files: {e}")
             return {"status": "error", "message": str(e)}
@@ -938,11 +1030,9 @@ class InfoHubFileManager:
                 }
 
             root_path = Path(self.watched_root)
-            if not root_path.exists():
-                return {
-                    "status": "error",
-                    "message": self.tr("result.rootMissing", path=self.watched_root),
-                }
+            error = self._root_error(root_path, need_write=True)
+            if error:
+                return error
 
             uploaded = 0
             skipped = 0
@@ -956,22 +1046,20 @@ class InfoHubFileManager:
             estado_fuentes = sync_guards.cargar_estado_fuentes()
             bloqueados = {}
 
-            # Deduplicate workspaces by name across parent dirs
             workspaces_by_name = {}
-            for item in root_path.iterdir():
-                if item.is_dir() and (
-                    item.name.startswith("Infohub")
-                    or item.name.startswith("AnythingLLM")
-                ):
-                    for workspace_folder in item.iterdir():
-                        if workspace_folder.is_dir():
-                            workspaces_by_name.setdefault(workspace_folder.name, workspace_folder)
+            for workspace_folder in child_dirs(root_path):
+                workspaces_by_name.setdefault(workspace_folder.name, workspace_folder)
 
             # Protected workspaces are managed outside the file manager.
             workspaces_by_name, protegidos = self._skip_protected(workspaces_by_name)
 
-            # Only process workspaces the API key can access
-            accessible = self.get_accessible_workspace_names(list(workspaces_by_name.keys()))
+            # Only process workspaces the API key can access; en simulación no se crea nada
+            if simular:
+                accessible, avisos = self.get_accessible_workspace_names(
+                    list(workspaces_by_name.keys())
+                ), {}
+            else:
+                accessible, avisos = self.ensure_workspaces(list(workspaces_by_name.keys()))
             workspaces_by_name = {
                 name: folder for name, folder in workspaces_by_name.items() if name in accessible
             }
@@ -1095,7 +1183,7 @@ class InfoHubFileManager:
                     message += self.tr("result.protected", names=", ".join(protegidos))
                 if bloqueados:
                     message += self.tr("result.blocked", count=len(bloqueados), names=", ".join(bloqueados))
-                return {
+                return self._creation_warnings({
                     "status": "success",
                     "message": message,
                     "blocked_deletions": bloqueados,
@@ -1104,7 +1192,7 @@ class InfoHubFileManager:
                     "would_upload": subirian,
                     "workspaces_processed": workspaces_processed,
                     "protected": protegidos,
-                }
+                }, avisos)
 
             result_msg = self.tr("result.full", processed=workspaces_processed, uploaded=uploaded,
                                  skipped=skipped, deleted=deleted)
@@ -1129,7 +1217,7 @@ class InfoHubFileManager:
             if delete_errors:
                 result["delete_errors"] = delete_errors
 
-            return result
+            return self._creation_warnings(result, avisos)
         except Exception as e:
             logger.error(f"Error in full upload: {e}")
             return {"status": "error", "message": str(e)}
@@ -1190,11 +1278,9 @@ class InfoHubFileManager:
             }
 
         root_path = Path(self.watched_root)
-        if not root_path.exists():
-            return {
-                "status": "error",
-                "message": self.tr("result.rootMissing", path=self.watched_root),
-            }
+        error = self._root_error(root_path, need_write=True)
+        if error:
+            return error
 
         image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
         processed = 0
@@ -1202,17 +1288,10 @@ class InfoHubFileManager:
         errors = []
 
         # Collect all images first for better logging
-        # Deduplicate workspaces by name across parent dirs
         images_to_process = []
         workspaces_by_name = {}
-        for item in root_path.iterdir():
-            if item.is_dir() and (
-                item.name.startswith("Infohub")
-                or item.name.startswith("AnythingLLM")
-            ):
-                for workspace_folder in item.iterdir():
-                    if workspace_folder.is_dir():
-                        workspaces_by_name.setdefault(workspace_folder.name, workspace_folder)
+        for workspace_folder in child_dirs(root_path):
+            workspaces_by_name.setdefault(workspace_folder.name, workspace_folder)
 
         for workspace_name, workspace_folder in workspaces_by_name.items():
             for file_path in workspace_folder.iterdir():
@@ -1511,7 +1590,8 @@ def _build(page: ft.Page, session: dict):
                     italic=True,
                 )
             ]
-        page.show_dialog(user_ws_dialog)
+        if not user_ws_dialog.open:
+            page.show_dialog(user_ws_dialog)
 
     def _validate_credentials(base_url: str, api_key: str) -> bool:
         try:
@@ -1536,6 +1616,13 @@ def _build(page: ft.Page, session: dict):
             _show_user_workspaces()
 
     login_dialog.on_dismiss = _show_pending_workspaces
+
+    def _close_login_dialog():
+        """Cierra el login por identidad: pop_dialog se lleva el de arriba y, con
+        dos envíos seguidos, dejaba el login abierto debajo del de workspaces."""
+        if login_dialog.open:
+            login_dialog.open = False
+            login_dialog.update()
 
     def _after_login(username: str, base_url: str, close_login: bool = False):
         """Corre en un hilo: valida la API key y deja la UI al bucle de Flet.
@@ -1573,7 +1660,7 @@ def _build(page: ft.Page, session: dict):
             if close_login:
                 login_error.value = ""
                 login_progress.visible = False
-                page.pop_dialog()
+                _close_login_dialog()
             return
         if not api_ok:
             show_snackbar(tr("login.noApiKey"), T.DANGER)
@@ -1584,7 +1671,7 @@ def _build(page: ft.Page, session: dict):
         login_error.value = ""
         login_progress.visible = False
         pending_workspaces["show"] = True
-        page.pop_dialog()
+        _close_login_dialog()
         await asyncio.sleep(LOGIN_DISMISS_WAIT_SECONDS)
         _show_pending_workspaces()  # Flutter no confirmó el cierre a tiempo
 
@@ -1592,7 +1679,8 @@ def _build(page: ft.Page, session: dict):
         login_error.value = message
         login_progress.visible = False
         if reopen:
-            page.show_dialog(login_dialog)
+            if not login_dialog.open:
+                page.show_dialog(login_dialog)
         else:
             page.update()
 
@@ -1615,6 +1703,10 @@ def _build(page: ft.Page, session: dict):
         )
 
     def _handle_login():
+        # Un doble envío (Enter + clic) lanzaba dos logins y el segundo cierre se
+        # llevaba el diálogo equivocado.
+        if login_progress.visible:
+            return
         base_url = login_base_url.value.strip()
         username = login_username.value.strip()
         password = login_password.value or ""
@@ -2113,6 +2205,85 @@ def _build(page: ft.Page, session: dict):
         explorer_dialog.content = ft.Column(items, scroll=ft.ScrollMode.AUTO, spacing=0, height=400)
         page.show_dialog(explorer_dialog)
 
+    # --- Selector de carpeta (navega lo que ve el servidor: el home montado) ---
+    picker_state = {"path": Path.home(), "target": None}
+    picker_path_text = ft.Text("", size=12, color=T.TEXT_2, selectable=True)
+    picker_list = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO, height=300)
+
+    def picker_go(path: Path):
+        picker_state["path"] = path
+        picker_path_text.value = str(path)
+        rows = []
+        if path.parent != path:
+            rows.append(
+                ft.TextButton(
+                    tr("picker.up"),
+                    icon=Icons.ARROW_UPWARD,
+                    on_click=lambda e, p=path.parent: picker_go(p),
+                )
+            )
+        dirs = child_dirs(path)
+        rows += [
+            ft.TextButton(
+                d.name,
+                icon=Icons.FOLDER_OUTLINED,
+                on_click=lambda e, p=d: picker_go(p),
+            )
+            for d in dirs
+        ]
+        if not dirs:
+            if os.access(path, os.R_OK):
+                rows.append(ft.Text(tr("picker.empty"), size=12, color=T.TEXT_3, italic=True))
+            else:
+                rows.append(ft.Text(tr("picker.noAccess"), size=12, color=T.DANGER))
+        picker_list.controls = rows
+        page.update()
+
+    def picker_confirm():
+        target = picker_state["target"]
+        if target is not None:
+            target.value = home_relative(picker_state["path"])
+            target.update()
+        page.pop_dialog()
+
+    def open_folder_picker(target):
+        picker_state["target"] = target
+        start = Path(os.path.expanduser((target.value or "").strip() or "~"))
+        picker_go(start if start.is_dir() else Path.home())
+        page.show_dialog(picker_dialog)
+
+    picker_dialog = ft.AlertDialog(
+        modal=True,
+        bgcolor=T.BG_SECONDARY,
+        title=ft.Text(tr("picker.title"), size=18, weight=ft.FontWeight.BOLD, color=T.TEXT),
+        content=ft.Container(
+            content=ft.Column(
+                [picker_path_text, ft.Divider(height=1), picker_list],
+                spacing=8,
+                tight=True,
+            ),
+            width=520,
+        ),
+        actions=[
+            ft.TextButton(
+                tr("common.cancel"),
+                icon=Icons.CLOSE_OUTLINED,
+                on_click=lambda e: page.pop_dialog(),
+            ),
+            ft.FilledButton(
+                tr("picker.select"),
+                icon=Icons.CHECK,
+                on_click=lambda e: picker_confirm(),
+                style=ft.ButtonStyle(
+                    bgcolor=T.ACCENT,
+                    color=T.ON_ACCENT,
+                    shape=T.SHAPE,
+                ),
+            ),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+
     # --- Config Editor Dialog ---
     config_fields = {}
     config_schema = ConfigManager.get_schema()
@@ -2170,11 +2341,21 @@ def _build(page: ft.Page, session: dict):
                     width=280,
                 )
                 config_fields[key] = tf
+                row_controls = [
+                    ft.Text(label, size=14, color=T.TEXT, expand=True),
+                    tf,
+                ]
+                if key == "watched_folders_root":
+                    row_controls.append(
+                        ft.IconButton(
+                            icon=Icons.FOLDER_OPEN_OUTLINED,
+                            tooltip=tr("picker.title"),
+                            icon_color=T.ACCENT_HOVER,
+                            on_click=lambda e, t=tf: open_folder_picker(t),
+                        )
+                    )
                 row = ft.Row(
-                    [
-                        ft.Text(label, size=14, color=T.TEXT, expand=True),
-                        tf,
-                    ],
+                    row_controls,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
 
@@ -2237,7 +2418,9 @@ def _build(page: ft.Page, session: dict):
             manager.ollama_url = os.getenv("OLLAMA_BASE_URL") or config.get("ollama_base_url", "http://localhost:11434")
             manager.ollama_model = os.getenv("OLLAMA_MODEL") or config.get("ollama_model", "llava:latest")
             manager.image_description_active = config.get("image_description_active", True)
-            manager.watched_root = os.getenv("WATCHED_FOLDERS_ROOT") or config.get("watched_folders_root", "")
+            manager.watched_root = os.path.expanduser(
+                os.getenv("WATCHED_FOLDERS_ROOT") or config.get("watched_folders_root", "")
+            )
             page.title = config.get("app_title", "InfoHub File Manager")
             page.update()
 
