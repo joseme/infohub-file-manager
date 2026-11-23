@@ -16,7 +16,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY --chown=infohub:infohub app.py config_manager.py ui_theme.py workspace_map.py features.py demo_mode.py sync_guards.py i18n.py ./
 COPY --chown=infohub:infohub assets ./assets
 
-RUN chown -R infohub:infohub /app
+# /data con dueño infohub: un volumen nuevo montado ahí hereda ese dueño (si no,
+# queda de root y la app no puede guardar config.json ni el log).
+RUN mkdir -p /data && chown -R infohub:infohub /app /data
 
 USER infohub
 
