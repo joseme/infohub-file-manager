@@ -211,7 +211,7 @@ def motivo_bloqueo_borrado(carpeta: pathlib.Path, locales: int, remotos: int, hu
     El montaje caído bloquea siempre; las guardas de vacío/proporción se pueden
     saltar con --forzar-borrado (p. ej. tras reorganizar un workspace entero).
     """
-    if sync_guards.montaje_caido(carpeta, bot_cfg.get("montajes_requeridos")):
+    if sync_guards.montaje_caido(carpeta, sync_guards.montajes_requeridos(bot_cfg.get("montajes_requeridos"))):
         return "la carpeta está en montajes_requeridos y no está montada"
     if bot_cfg.get("forzar_borrado"):
         return None

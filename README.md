@@ -94,8 +94,12 @@ ANYTHINGLLM_BASE_URL=https://tu-instancia.anythingllm.com
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=bkudler/llava-phi3
 
-# Image Description Settings
+# Image Description Settings (manda sobre el panel; vacío = lo decide el panel)
 IMAGE_DESCRIPTION_ACTIVATE=true
+
+# Guardas y ubicación de la configuración (servidor / instalador de InfoHub)
+MONTAJES_REQUERIDOS=/mnt/infohub/carpetas   # montajes que deben estar arriba para borrar huérfanos
+CONFIG_FILE=/data/config.json               # config.json fuera del código
 
 # Application Settings
 APP_PORT=8500

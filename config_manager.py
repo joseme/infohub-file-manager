@@ -4,6 +4,7 @@ ConfigManager - Loads and saves app configuration from config.json
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -12,7 +13,9 @@ logger = logging.getLogger(__name__)
 # PyInstaller onefile: __file__ resolves inside the ephemeral _MEIPASS extraction
 # dir, so config.json must be anchored to the real executable's location instead.
 BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
-CONFIG_FILE = BASE_DIR / "config.json"
+# CONFIG_FILE permite guardarlo fuera del código, p. ej. en el volumen /data
+# del contenedor (instalador de InfoHub): así sobrevive a reconstruir la imagen.
+CONFIG_FILE = Path(os.getenv("CONFIG_FILE") or BASE_DIR / "config.json")
 
 DEFAULTS = {
     "app_title": "InfoHub File Manager",

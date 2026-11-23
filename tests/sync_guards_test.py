@@ -314,3 +314,33 @@ class TestAppGuardas:
             res = mgr_app.full_upload_and_clean()
         assert res["status"] == "error"
         assert "no es accesible" in res["message"]
+
+
+# ---------------------------------------------------------------------------
+# MONTAJES_REQUERIDOS (instalador de InfoHub con carpetas SMB/NFS)
+
+
+class TestMontajesDeEntorno:
+    def test_sin_variable_solo_los_configurados(self, monkeypatch):
+        monkeypatch.delenv("MONTAJES_REQUERIDOS", raising=False)
+        assert sync_guards.montajes_requeridos(["/a"]) == ["/a"]
+        assert sync_guards.montajes_requeridos(None) == []
+
+    def test_suma_la_variable_sin_repetir(self, monkeypatch):
+        monkeypatch.setenv("MONTAJES_REQUERIDOS", " /mnt/infohub/carpetas , /a ,, ")
+        assert sync_guards.montajes_requeridos(["/a"]) == ["/a", "/mnt/infohub/carpetas"]
+
+    def test_la_app_bloquea_con_montaje_de_entorno_caido(self, tmp_path, monkeypatch):
+        punto = tmp_path / "carpetas"
+        punto.mkdir()  # existe pero no es un punto de montaje: recurso caído
+        monkeypatch.setenv("MONTAJES_REQUERIDOS", str(punto))
+        manager = InfoHubFileManager()
+        assert str(punto) in manager.montajes_requeridos
+        assert manager._motivo_bloqueo_borrado(punto, 5, 5, 1) is not None
+
+    def test_sync_bot_bloquea_con_montaje_de_entorno_caido(self, tmp_path, monkeypatch):
+        punto = tmp_path / "carpetas"
+        punto.mkdir()
+        monkeypatch.setenv("MONTAJES_REQUERIDOS", str(punto))
+        motivo = sync_bot.motivo_bloqueo_borrado(punto, 5, 5, 1, {"montajes_requeridos": []})
+        assert motivo and "montaj" in motivo

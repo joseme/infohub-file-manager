@@ -173,3 +173,35 @@ class TestConfigManager:
         cm2 = ConfigManager(tmp_path / "types.json")
         assert cm2.get("app_port") == 3000
         assert cm2.get("image_description_active") is False
+
+
+class TestConfigFileFromEnv:
+    """CONFIG_FILE lleva config.json fuera del código (volumen /data del contenedor)."""
+
+    def test_config_file_env_changes_default_path(self, tmp_path: Path, monkeypatch):
+        import importlib
+        import config_manager
+
+        target = tmp_path / "datos" / "config.json"
+        target.parent.mkdir()
+        target.write_text(json.dumps({"app_title": "Desde /data"}), encoding="utf-8")
+        monkeypatch.setenv("CONFIG_FILE", str(target))
+        try:
+            mod = importlib.reload(config_manager)
+            assert mod.CONFIG_FILE == target
+            cm = mod.ConfigManager()
+            assert cm.get("app_title") == "Desde /data"
+            cm.set("app_title", "Guardado")
+            assert cm.save() is True
+            assert json.loads(target.read_text(encoding="utf-8"))["app_title"] == "Guardado"
+        finally:
+            monkeypatch.delenv("CONFIG_FILE")
+            importlib.reload(config_manager)
+
+    def test_without_env_uses_base_dir(self, monkeypatch):
+        import importlib
+        import config_manager
+
+        monkeypatch.delenv("CONFIG_FILE", raising=False)
+        mod = importlib.reload(config_manager)
+        assert mod.CONFIG_FILE == mod.BASE_DIR / "config.json"

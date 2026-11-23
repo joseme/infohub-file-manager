@@ -107,6 +107,19 @@ def _query_param(page: ft.Page, key: str) -> str:
     return ""
 
 
+def image_description_setting(config) -> bool:
+    """Descripción de imágenes activa: IMAGE_DESCRIPTION_ACTIVATE manda sobre config.json.
+
+    El instalador de InfoHub la apaga cuando las carpetas son de solo lectura
+    (un recurso SMB/NFS montado con ro): las descripciones se escriben junto a
+    cada imagen y fallarían.
+    """
+    env_img = os.getenv("IMAGE_DESCRIPTION_ACTIVATE")
+    if env_img and env_img.strip():
+        return env_img.strip().lower() == "true"
+    return config.get("image_description_active", True)
+
+
 class InfoHubFileManager:
     """Manages file synchronization with AnythingLLM/InfoHub"""
 
@@ -116,7 +129,7 @@ class InfoHubFileManager:
             self.base_url = os.getenv("ANYTHINGLLM_BASE_URL") or config.get("anythingllm_base_url", "http://localhost:3000")
             self.ollama_url = os.getenv("OLLAMA_BASE_URL") or config.get("ollama_base_url", "http://localhost:11434")
             self.ollama_model = os.getenv("OLLAMA_MODEL") or config.get("ollama_model", "llava:latest")
-            self.image_description_active = config.get("image_description_active", True)
+            self.image_description_active = image_description_setting(config)
             self.watched_root = os.path.expanduser(
                 os.getenv("WATCHED_FOLDERS_ROOT") or config.get("watched_folders_root", "")
             )
@@ -146,7 +159,7 @@ class InfoHubFileManager:
         cfg = config or {}
         self.umbral_borrado_pct = cfg.get("umbral_borrado_pct", sync_guards.UMBRAL_PCT_DEFECTO)
         self.minimo_borrado = cfg.get("minimo_borrado", sync_guards.MINIMO_DEFECTO)
-        self.montajes_requeridos = cfg.get("montajes_requeridos", []) or []
+        self.montajes_requeridos = sync_guards.montajes_requeridos(cfg.get("montajes_requeridos"))
 
         # Cache within a single operation to avoid duplicate server lookups
         # for the same workspace and to remember docpaths already uploaded.
@@ -2417,7 +2430,7 @@ def _build(page: ft.Page, session: dict):
             manager.base_url = os.getenv("ANYTHINGLLM_BASE_URL") or config.get("anythingllm_base_url", "http://localhost:3000")
             manager.ollama_url = os.getenv("OLLAMA_BASE_URL") or config.get("ollama_base_url", "http://localhost:11434")
             manager.ollama_model = os.getenv("OLLAMA_MODEL") or config.get("ollama_model", "llava:latest")
-            manager.image_description_active = config.get("image_description_active", True)
+            manager.image_description_active = image_description_setting(config)
             manager.watched_root = os.path.expanduser(
                 os.getenv("WATCHED_FOLDERS_ROOT") or config.get("watched_folders_root", "")
             )

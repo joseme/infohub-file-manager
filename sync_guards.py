@@ -58,6 +58,24 @@ def evaluar_borrado(locales: int, remotos: int, huerfanos: int,
     return None
 
 
+def montajes_de_entorno() -> list:
+    """Montajes requeridos de la variable MONTAJES_REQUERIDOS (rutas separadas por coma).
+
+    La fija el instalador de InfoHub cuando las carpetas vienen de un recurso
+    SMB/NFS; se suman a los de config.json / sync_bot.json.
+    """
+    return [m.strip() for m in os.getenv("MONTAJES_REQUERIDOS", "").split(",") if m.strip()]
+
+
+def montajes_requeridos(configurados: Optional[Iterable]) -> list:
+    """Montajes de la configuración más los de MONTAJES_REQUERIDOS, sin repetir."""
+    vistos = []
+    for m in list(configurados or []) + montajes_de_entorno():
+        if m and m not in vistos:
+            vistos.append(m)
+    return vistos
+
+
 def montaje_caido(carpeta, montajes: Iterable) -> bool:
     """True si `carpeta` es (o está dentro de) un montaje requerido que no está montado."""
     try:
