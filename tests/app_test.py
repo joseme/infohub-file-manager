@@ -2295,3 +2295,23 @@ class TestRecursiveE2ECrossCutting:
         result, deleted = run_full()
         assert result["deleted"] == 1
         assert deleted == [f"raiz__informe_final-{self.UUID_D}.json"]
+
+
+class TestImageDescriptionSetting:
+    """IMAGE_DESCRIPTION_ACTIVATE manda sobre config.json (carpetas de solo lectura)."""
+
+    def test_env_false_overrides_config_true(self, monkeypatch):
+        from app import image_description_setting
+        monkeypatch.setenv("IMAGE_DESCRIPTION_ACTIVATE", "false")
+        assert image_description_setting({"image_description_active": True}) is False
+
+    def test_env_true_overrides_config_false(self, monkeypatch):
+        from app import image_description_setting
+        monkeypatch.setenv("IMAGE_DESCRIPTION_ACTIVATE", "TRUE")
+        assert image_description_setting({"image_description_active": False}) is True
+
+    def test_without_env_uses_config(self, monkeypatch):
+        from app import image_description_setting
+        monkeypatch.delenv("IMAGE_DESCRIPTION_ACTIVATE", raising=False)
+        assert image_description_setting({"image_description_active": False}) is False
+        assert image_description_setting({}) is True
